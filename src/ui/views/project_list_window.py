@@ -5,6 +5,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QListWidget,
     QHBoxLayout, QPushButton, QListWidgetItem
 )
+from PyQt6.QtGui import QIcon
+from src.utils import resource_path
 
 class ProjectListWindow(QMainWindow):
     """Defines the UI for the main project management screen."""
@@ -13,6 +15,7 @@ class ProjectListWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("Project-Based File Exporter - Select a Project")
         self.setMinimumSize(400, 300)
+        self.setWindowIcon(QIcon(resource_path("assets/icon.ico")))
 
         # Central widget and layout
         central_widget = QWidget()

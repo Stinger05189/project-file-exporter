@@ -4,13 +4,14 @@
 from typing import Dict, Any, Tuple, List
 import os
 
-from PyQt6.QtGui import QAction, QColor, QBrush, QPainter, QTextDocument
+from PyQt6.QtGui import QAction, QColor, QBrush, QPainter, QTextDocument, QIcon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter, QLabel,
     QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator
 )
 from PyQt6.QtCore import Qt, QRectF, QByteArray
+from src.utils import resource_path
 
 class PathDelegate(QStyledItemDelegate):
     """A delegate to render HTML in a specific column of the QTreeWidget."""
@@ -45,6 +46,7 @@ class ProjectViewWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle(f"Project View - {project_name}")
         self.setMinimumSize(900, 700)
+        self.setWindowIcon(QIcon(resource_path("assets/icon.ico")))
 
         # --- Toolbar ---
         toolbar = self.addToolBar("Main Toolbar")
