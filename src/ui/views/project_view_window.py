@@ -74,6 +74,10 @@ class ProjectViewWindow(QMainWindow):
         config_layout = QVBoxLayout(config_panel)
         
         form_layout = QFormLayout()
+        
+        self.blacklisted_paths_textbox = QTextEdit()
+        form_layout.addRow(QLabel("Blacklisted Directory Names (one per line):"), self.blacklisted_paths_textbox)
+
         self.inclusive_filters_textbox = QTextEdit()
         self.exclusive_filters_textbox = QTextEdit()
         form_layout.addRow(QLabel("Inclusive Filters (one per line):"), self.inclusive_filters_textbox)
@@ -132,7 +136,17 @@ class ProjectViewWindow(QMainWindow):
         """Sets the text in the filter boxes."""
         self.inclusive_filters_textbox.setPlainText("\n".join(inclusive))
         self.exclusive_filters_textbox.setPlainText("\n".join(exclusive))
-    
+
+    def get_blacklisted_paths(self) -> List[str]:
+        """Returns the current text from the blacklist textbox as a list of strings."""
+        paths = self.blacklisted_paths_textbox.toPlainText().splitlines()
+        # Filter out empty lines
+        return [line.strip() for line in paths if line.strip()]
+
+    def set_blacklisted_paths_text(self, paths: list[str]):
+        """Sets the text in the blacklist box."""
+        self.blacklisted_paths_textbox.setPlainText("\n".join(paths))
+
     def get_extension_overrides(self) -> Dict[str, str]:
         """Parses the extension overrides textbox and returns a dictionary."""
         overrides = {}

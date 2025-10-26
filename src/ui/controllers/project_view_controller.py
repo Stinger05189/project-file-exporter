@@ -35,6 +35,7 @@ class ProjectViewController(QObject):
 
     def show(self):
         """Populates the view with initial data and shows the window."""
+        self._view.set_blacklisted_paths_text(self._project_config.blacklisted_paths)
         self._view.set_filters_text(
             self._project_config.inclusive_filters,
             self._project_config.exclusive_filters
@@ -72,6 +73,9 @@ class ProjectViewController(QObject):
             # On initial load, we will restore state from the config file
             expanded_paths = set(self._project_config.ui_state.get("expanded_paths", []))
 
+        blacklist = self._view.get_blacklisted_paths()
+        self._project_config.blacklisted_paths = blacklist
+
         inclusive, exclusive = self._view.get_filters()
         self._project_config.inclusive_filters = inclusive
         self._project_config.exclusive_filters = exclusive
@@ -83,7 +87,10 @@ class ProjectViewController(QObject):
         self._config_manager.save_project(self._project_config)
 
         try:
-            raw_tree = FileScanner.scan_directory(self._project_config.root_path)
+            raw_tree = FileScanner.scan_directory(
+                self._project_config.root_path,
+                self._project_config.blacklisted_paths
+            )
             self._filtered_tree = FilterEngine.apply_filters(
                 raw_tree,
                 self._project_config.root_path,
