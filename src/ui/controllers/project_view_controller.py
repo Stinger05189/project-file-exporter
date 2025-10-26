@@ -2,7 +2,9 @@
 # Copyright (c) 2025 Google. All rights reserved.
 
 from PyQt6.QtCore import pyqtSignal, QObject
-from PyQt6.QtWidgets import QFileDialog, QMessageBox, QMenu
+from PyQt6.QtWidgets import (
+    QFileDialog, QMessageBox, QMenu, QTreeWidgetItemIterator, QTreeWidgetItem
+)
 import os
 import sys
 import subprocess
@@ -11,6 +13,7 @@ from PyQt6.QtCore import Qt
 from src.core.config_manager import ConfigManager
 from src.core.project_config import ProjectConfig
 from src.ui.views.project_view_window import ProjectViewWindow
+from src.ui.views.help_dialog import HelpDialog
 from src.logic.file_scanner import FileScanner
 from src.logic.filter_engine import FilterEngine
 from src.logic.export_manager import ExportManager
@@ -27,6 +30,7 @@ class ProjectViewController(QObject):
         self._view = ProjectViewWindow(self._project_config.project_name)
         
         self._filtered_tree = {}
+        self._show_full_path = False # New state for path view
         self._connect_signals()
 
     def show(self):
@@ -41,6 +45,7 @@ class ProjectViewController(QObject):
         self._view.show()
         # Apply window geometry, splitter state etc. after showing the window
         self._view.apply_ui_state(self._project_config.ui_state)
+        self._view.toggle_path_action.setChecked(self._show_full_path)
     
     def _connect_signals(self):
         """Connects signals from the view to controller methods."""
@@ -48,8 +53,15 @@ class ProjectViewController(QObject):
         self._view.back_action.triggered.connect(self._on_back)
         self._view.export_action.triggered.connect(self._on_export)
         self._view.help_action.triggered.connect(self._show_help_dialog)
+        self._view.toggle_path_action.triggered.connect(self._on_toggle_path_view)
         self._view.file_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self._view.closeEvent = self._on_close_event
+
+    def _on_toggle_path_view(self, checked: bool):
+        """Handles the 'Show Full Paths' toggle action."""
+        self._show_full_path = checked
+        # Re-populate the tree to reflect the change
+        self._on_apply_filters()
 
     def _on_apply_filters(self, is_initial_load: bool = False):
         """Scans files, applies filters, and updates the tree view."""
@@ -78,8 +90,13 @@ class ProjectViewController(QObject):
                 inclusive,
                 exclusive
             )
-            # 2. Repopulate the tree, passing overrides for visual feedback
-            self._view.populate_file_tree(self._filtered_tree, overrides)
+            # 2. Repopulate the tree, passing overrides and path view state
+            self._view.populate_file_tree(
+                self._filtered_tree,
+                overrides,
+                self._project_config.root_path,
+                self._show_full_path
+            )
 
             # 3. Restore the expanded state
             self._view.apply_expanded_state(expanded_paths)
@@ -90,7 +107,7 @@ class ProjectViewController(QObject):
         except ValueError as e:
             QMessageBox.critical(self._view, "Error Scanning Directory", str(e))
             self._filtered_tree = {}
-            self._view.populate_file_tree({}, {})
+            self._view.populate_file_tree({}, {}, self._project_config.root_path, self._show_full_path)
             self._view.update_status_bar(0, 0, 0)
     
     def _on_export(self):
@@ -136,14 +153,27 @@ class ProjectViewController(QObject):
         if not item:
             return
 
-        # Path is now stored in UserRole data on the path column (index 3)
+        # Path is stored in UserRole on the path column (index 3)
         item_path = item.data(3, Qt.ItemDataRole.UserRole)
+        # Type is stored in a custom UserRole on the name column (index 0)
+        item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
         if not item_path:
             return
         
         relative_path = os.path.relpath(item_path, self._project_config.root_path)
 
         menu = QMenu()
+        
+        # Add expand/collapse options for directories
+        if item_type == "directory":
+            if item.isExpanded():
+                collapse_action = menu.addAction("Collapse All")
+                collapse_action.triggered.connect(lambda: self._on_expand_collapse_all(item, expand=False))
+            else:
+                expand_action = menu.addAction("Expand All")
+                expand_action.triggered.connect(lambda: self._on_expand_collapse_all(item, expand=True))
+            menu.addSeparator()
+
         exclude_action = menu.addAction("Exclude from Export")
         include_action = menu.addAction("Include in Export")
 
@@ -151,6 +181,15 @@ class ProjectViewController(QObject):
         include_action.triggered.connect(lambda: self._on_context_include(relative_path))
         
         menu.exec(self._view.file_tree_widget.mapToGlobal(point))
+
+    def _on_expand_collapse_all(self, start_item: QTreeWidgetItem, expand: bool):
+        """Recursively expands or collapses all children of a given item."""
+        start_item.setExpanded(expand)
+        iterator = QTreeWidgetItemIterator(start_item)
+        while iterator.value():
+            item = iterator.value()
+            item.setExpanded(expand)
+            iterator += 1
 
     def _on_context_exclude(self, relative_path_to_exclude: str):
         """Adds an item's path to the exclusive filters."""
@@ -207,65 +246,35 @@ class ProjectViewController(QObject):
     def _show_help_dialog(self):
         """Displays a dialog with information on how to use filters."""
         help_text = """
-        <html><head>
-            <style>
-                body { font-size: 10pt; color: #f0f0f0; }
-                h2 { color: #5294e2; border-bottom: 1px solid #555; padding-bottom: 5px; }
-                h4 { margin-top: 15px; margin-bottom: 5px; }
-                ul { padding-left: 20px; }
-                li { margin-bottom: 6px; }
-                code { 
-                    background-color: #4a4a4a; 
-                    padding: 2px 6px; 
-                    border-radius: 3px; 
-                    font-family: Consolas, "Courier New", monospace;
-                    color: #d0d0d0;
-                }
-            </style>
-        </head><body>
-            <h2>Filter Syntax Guide</h2>
-            <p>Filters use <b>glob patterns</b> to include or exclude files and directories.</p>
-            
-            <h4>Key Rules</h4>
-            <ul>
-                <li><b>Exclusive filters always take precedence.</b> If a file matches both an inclusive and an exclusive pattern, it will be <b>excluded</b>.</li>
-                <li>If <b>no inclusive filters</b> are provided, all files are considered included by default (before exclusion rules are applied).</li>
-                <li>To match a directory, end the pattern with a forward slash (e.g., <code>__pycache__/</code>).</li>
-            </ul>
+# Filter Syntax Guide
 
-            <h4>Common Patterns</h4>
-            <table>
-                <tr>
-                    <td width="100"><code>*</code></td>
-                    <td>Matches any sequence of characters in a name.</td>
-                </tr>
-                <tr>
-                    <td><code>?</code></td>
-                    <td>Matches any single character.</td>
-                </tr>
-                <tr>
-                    <td><code>[abc]</code></td>
-                    <td>Matches one character from the set (a, b, or c).</td>
-                </tr>
-                <tr>
-                    <td><code>**</code></td>
-                    <td>Matches directories recursively (e.g. <code>src/**/*.ui</code>).</td>
-                </tr>
-            </table>
+Filters use **glob patterns** to include or exclude files and directories from the export.
 
-            <h4>Examples</h4>
-            <ul>
-                <li><code>*.py</code> &mdash; Matches all files ending with <code>.py</code>.</li>
-                <li><code>assets/*.png</code> &mdash; Matches all PNGs directly inside the <code>assets</code> folder.</li>
-                <li><code>.git/</code> &mdash; Excludes the Git metadata directory.</li>
-                <li><code>*.log</code> &mdash; Excludes all log files.</li>
-            </ul>
-        </body></html>
-        """
-        dialog = QMessageBox(self._view)
-        dialog.setWindowTitle("Filter Guide")
-        dialog.setText(help_text)
-        dialog.setIcon(QMessageBox.Icon.Information)
-        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
-        dialog.setMinimumSize(600, 500)
+---
+
+### Key Rules
+*   **Exclusive filters always take precedence.** If a file matches both an inclusive and an exclusive pattern, it will be **excluded**.
+*   If **no inclusive filters** are provided, all files are considered included by default (before exclusion rules are applied).
+*   To match a directory, end the pattern with a forward slash (e.g., `__pycache__/`).
+
+---
+
+### Common Patterns
+
+| Pattern | Description                                        |
+| :------ | :------------------------------------------------- |
+| `*`       | Matches any sequence of characters in a name.      |
+| `?`       | Matches any single character.                      |
+| `[abc]`   | Matches one character from the set (a, b, or c).   |
+| `**`      | Matches directories recursively (e.g. `src/**/*.ui`). |
+
+---
+
+### Examples
+-   `*.py` &mdash; Matches all files ending with `.py`.
+-   `assets/*.png` &mdash; Matches all PNGs directly inside the `assets` folder.
+-   `.git/` &mdash; Excludes the Git metadata directory.
+-   `*.log` &mdash; Excludes all log files.
+"""
+        dialog = HelpDialog(help_text, self._view)
         dialog.exec()

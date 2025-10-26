@@ -50,9 +50,12 @@ class ProjectViewWindow(QMainWindow):
         toolbar = self.addToolBar("Main Toolbar")
         self.back_action = QAction("Back to Projects", self)
         self.export_action = QAction("Export Files...", self)
+        self.toggle_path_action = QAction("Show Full Paths", self)
+        self.toggle_path_action.setCheckable(True)
         self.help_action = QAction("Help", self)
         toolbar.addAction(self.back_action)
         toolbar.addAction(self.export_action)
+        toolbar.addAction(self.toggle_path_action)
         toolbar.addAction(self.help_action)
 
         # --- Central Widget & Layout ---
@@ -145,17 +148,17 @@ class ProjectViewWindow(QMainWindow):
         """Sets the text in the extension overrides box from a dictionary."""
         lines = [f"{source}:{target}" for source, target in overrides.items()]
         self.extension_overrides_textbox.setPlainText("\n".join(lines))
-
-    def populate_file_tree(self, filtered_tree: Dict[str, Any], overrides: Dict[str, str]):
+        
+    def populate_file_tree(self, filtered_tree: Dict[str, Any], overrides: Dict[str, str], root_path: str, show_full_path: bool):
         """Clears and rebuilds the file tree widget based on filtered data."""
         self.file_tree_widget.clear()
         if not filtered_tree:
             return
         
-        self._add_tree_item(None, filtered_tree, overrides)
+        self._add_tree_item(None, filtered_tree, overrides, root_path, show_full_path)
         self.file_tree_widget.expandToDepth(0)
 
-    def _add_tree_item(self, parent_item: QTreeWidgetItem | None, node: Dict[str, Any], overrides: Dict[str, str]):
+    def _add_tree_item(self, parent_item: QTreeWidgetItem | None, node: Dict[str, Any], overrides: Dict[str, str], root_path: str, show_full_path: bool):
         """Recursively adds an item to the tree widget."""
         if parent_item is None:
             tree_item = QTreeWidgetItem(self.file_tree_widget)
@@ -165,24 +168,40 @@ class ProjectViewWindow(QMainWindow):
         tree_item.setText(0, node["name"])
         tree_item.setText(2, node.get("status", "unknown"))
 
-        # Store raw path in UserRole, and display HTML path in the column
-        path_text = node["path"]
-        tree_item.setData(3, Qt.ItemDataRole.UserRole, path_text)
+        # Store extra data for context menu and path toggling
+        tree_item.setData(0, Qt.ItemDataRole.UserRole + 1, node["type"]) # Store node type
+        tree_item.setData(3, Qt.ItemDataRole.UserRole, node["path"]) # Store raw full path
+
+        # Determine which path to display (full or relative)
+        if show_full_path:
+            path_to_display = node["path"]
+        else:
+            path_to_display = os.path.relpath(node["path"], root_path)
+            if path_to_display == ".":
+                path_to_display = node["name"] # Show root folder name instead of '.'
 
         base_color = self.palette().color(self.palette().ColorRole.Text).name()
-        html_path = f"<font color='{base_color}'>"
+        html_path = ""
 
-        slash_colored = path_text.replace(os.sep, f"<font color='{self.path_slash_color}'>{os.sep}</font>")
+        # Generate HTML for styled path
         if node["type"] == "file":
-            name, ext = os.path.splitext(slash_colored)
+            path_dir, file_name = os.path.split(path_to_display)
+            name, ext = os.path.splitext(file_name)
+            
+            colored_dir = path_dir.replace(os.sep, f"<font color='{self.path_slash_color}'>{os.sep}</font>")
+            
+            html_path += f"<font color='{base_color}'>{colored_dir}"
+            if path_dir:
+                html_path += f"<font color='{self.path_slash_color}'>{os.sep}</font>"
+            html_path += f"{name}</font>"
+            
             if ext:
-                html_path += f"{name}<font color='{self.path_ext_color}'>{ext}</font>"
-            else:
-                html_path += name
-        else:
-            html_path += slash_colored
-
-        html_path += "</font>"
+                html_path += f"<font color='{self.path_ext_color}'>{ext}</font>"
+        else: # It's a directory
+            # For directories, only color the slashes
+            colored_path = path_to_display.replace(os.sep, f"<font color='{self.path_slash_color}'>{os.sep}</font>")
+            html_path = f"<font color='{base_color}'>{colored_path}</font>"
+        
         tree_item.setText(3, html_path)
 
         if node.get("status") == "excluded":
@@ -199,7 +218,8 @@ class ProjectViewWindow(QMainWindow):
                 tree_item.setForeground(1, self.override_brush)
         
         for child_node in node.get("children", []):
-            self._add_tree_item(tree_item, child_node, overrides)
+            # The parent of the next node is the item we just created.
+            self._add_tree_item(tree_item, child_node, overrides, root_path, show_full_path)
 
     def get_expanded_item_paths(self) -> set[str]:
         """Returns a set of raw paths for all currently expanded items in the tree."""

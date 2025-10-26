@@ -44,6 +44,11 @@ QTextEdit, QLineEdit {
     padding: 4px;
     color: #f0f0f0;
 }
+QTextBrowser {
+    background-color: #2b2b2b;
+    border: 1px solid #555555;
+    padding: 8px;
+}
 QListWidget {
     background-color: #3c3f41;
     border: 1px solid #555555;
