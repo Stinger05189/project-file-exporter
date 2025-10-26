@@ -3,6 +3,7 @@
 
 import fnmatch
 from typing import Dict, Any, List
+import os
 
 class FilterEngine:
     """Applies inclusive and exclusive filters to a file tree data structure."""

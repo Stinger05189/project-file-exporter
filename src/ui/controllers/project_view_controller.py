@@ -1,7 +1,7 @@
 # src/ui/controllers/project_view_controller.py
 # Copyright (c) 2025 Google. All rights reserved.
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, QObject
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 from PyQt6.QtCore import Qt
 
@@ -12,12 +12,13 @@ from src.logic.file_scanner import FileScanner
 from src.logic.filter_engine import FilterEngine
 from src.logic.export_manager import ExportManager
 
-class ProjectViewController:
+class ProjectViewController(QObject):
     """Manages the state and interactions of the ProjectViewWindow."""
     
     view_closed = pyqtSignal()
 
     def __init__(self, project_config: ProjectConfig, config_manager: ConfigManager):
+        super().__init__()
         self._project_config = project_config
         self._config_manager = config_manager
         self._view = ProjectViewWindow(self._project_config.project_name)
