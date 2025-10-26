@@ -37,6 +37,17 @@ QPushButton:disabled {
     background-color: #404040;
     color: #888888;
 }
+QPushButton#applyButton, QPushButton#exportButton {
+    background-color: #3a6f45;
+    border: 1px solid #5a8c64;
+    font-weight: bold;
+}
+QPushButton#applyButton:hover, QPushButton#exportButton:hover {
+    background-color: #4a7f55;
+}
+QPushButton#applyButton:pressed, QPushButton#exportButton:pressed {
+    background-color: #2a5f35;
+}
 QTextEdit, QLineEdit {
     background-color: #3c3f41;
     border: 1px solid #555555;
@@ -58,6 +69,9 @@ QTreeWidget {
     background-color: #3c3f41;
     border: 1px solid #555555;
     alternate-background-color: #45484a;
+}
+QTreeWidget::item {
+    border-bottom: 1px solid #4a4a4a;
 }
 QHeaderView::section {
     background-color: #4a4a4a;
@@ -89,6 +103,9 @@ QStatusBar {
 }
 QStatusBar::item {
     border: none;
+}
+QStatusBar QLabel {
+    color: #87ceeb; /* Light Blue for labels */
 }
 QLabel {
     color: #f0f0f0;

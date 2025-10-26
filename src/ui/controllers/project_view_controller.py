@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 import os
 import sys
 import subprocess
+import tempfile
 from PyQt6.QtCore import Qt
 
 from src.core.config_manager import ConfigManager
@@ -30,7 +31,9 @@ class ProjectViewController(QObject):
         self._view = ProjectViewWindow(self._project_config.project_name)
         
         self._filtered_tree = {}
-        self._show_full_path = False # New state for path view
+        # State for UI toggles
+        self._show_full_path = False
+        self._hide_excluded = False
         self._connect_signals()
 
     def show(self):
@@ -41,27 +44,39 @@ class ProjectViewController(QObject):
             self._project_config.exclusive_filters
         )
         self._view.set_extension_overrides_text(self._project_config.extension_overrides)
+        
+        # Load and apply UI toggle states from config
+        self._show_full_path = self._project_config.ui_state.get("show_full_path", False)
+        self._hide_excluded = self._project_config.ui_state.get("hide_excluded", False)
+        self._view.toggle_path_action.setChecked(self._show_full_path)
+        self._view.hide_excluded_action.setChecked(self._hide_excluded)
+
         # Pass a flag to indicate this is the first load
         self._on_apply_filters(is_initial_load=True)
         self._view.show()
         # Apply window geometry, splitter state etc. after showing the window
         self._view.apply_ui_state(self._project_config.ui_state)
-        self._view.toggle_path_action.setChecked(self._show_full_path)
     
     def _connect_signals(self):
         """Connects signals from the view to controller methods."""
         self._view.apply_filters_button.clicked.connect(self._on_apply_filters)
         self._view.back_action.triggered.connect(self._on_back)
-        self._view.export_action.triggered.connect(self._on_export)
+        self._view.export_button.clicked.connect(self._on_export)
+        self._view.open_export_action.triggered.connect(self._on_open_export_path)
         self._view.help_action.triggered.connect(self._show_help_dialog)
         self._view.toggle_path_action.triggered.connect(self._on_toggle_path_view)
+        self._view.hide_excluded_action.triggered.connect(self._on_toggle_hide_excluded)
         self._view.file_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self._view.closeEvent = self._on_close_event
 
     def _on_toggle_path_view(self, checked: bool):
         """Handles the 'Show Full Paths' toggle action."""
         self._show_full_path = checked
-        # Re-populate the tree to reflect the change
+        self._on_apply_filters()
+
+    def _on_toggle_hide_excluded(self, checked: bool):
+        """Handles the 'Hide Excluded Items' toggle action."""
+        self._hide_excluded = checked
         self._on_apply_filters()
 
     def _on_apply_filters(self, is_initial_load: bool = False):
@@ -82,7 +97,7 @@ class ProjectViewController(QObject):
 
         overrides = self._view.get_extension_overrides()
         self._project_config.extension_overrides = overrides
-
+        
         # Save the updated filters back to the config file
         self._config_manager.save_project(self._project_config)
 
@@ -97,12 +112,13 @@ class ProjectViewController(QObject):
                 inclusive,
                 exclusive
             )
-            # 2. Repopulate the tree, passing overrides and path view state
+            # 2. Repopulate the tree, passing all view state flags
             self._view.populate_file_tree(
                 self._filtered_tree,
                 overrides,
                 self._project_config.root_path,
-                self._show_full_path
+                self._show_full_path,
+                self._hide_excluded
             )
 
             # 3. Restore the expanded state
@@ -114,7 +130,7 @@ class ProjectViewController(QObject):
         except ValueError as e:
             QMessageBox.critical(self._view, "Error Scanning Directory", str(e))
             self._filtered_tree = {}
-            self._view.populate_file_tree({}, {}, self._project_config.root_path, self._show_full_path)
+            self._view.populate_file_tree({}, {}, self._project_config.root_path, self._show_full_path, self._hide_excluded)
             self._view.update_status_bar(0, 0, 0)
     
     def _on_export(self):
@@ -141,6 +157,22 @@ class ProjectViewController(QObject):
         except Exception as e:
             QMessageBox.critical(self._view, "Export Error", f"An unexpected error occurred during export:\n{e}")
 
+
+    def _on_open_export_path(self):
+        """Creates and opens the target export directory."""
+        try:
+            temp_dir = os.path.join(tempfile.gettempdir(), "ProjectFileExporter_Export")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            if sys.platform == "win32":
+                os.startfile(temp_dir)
+            elif sys.platform == "darwin": # macOS
+                subprocess.run(["open", temp_dir], check=True)
+            else: # Linux
+                subprocess.run(["xdg-open", temp_dir], check=True)
+        except Exception as e:
+            QMessageBox.critical(self._view, "Error", f"Could not open export directory:\n{e}")
+
     def _on_back(self):
         """Handles the 'Back to Projects' action."""
         self._view.close() # Triggers the closeEvent
@@ -149,6 +181,8 @@ class ProjectViewController(QObject):
         """Emits a signal when the window is closed."""
         # Save the current UI state before closing
         current_state = self._view.get_ui_state()
+        current_state["show_full_path"] = self._show_full_path
+        current_state["hide_excluded"] = self._hide_excluded
         self._project_config.ui_state = current_state
         self._config_manager.save_project(self._project_config)
         self.view_closed.emit()
@@ -170,7 +204,7 @@ class ProjectViewController(QObject):
             item.setSelected(True)
 
         # Retrieve data from the item that was actually clicked
-        item_path = item.data(3, Qt.ItemDataRole.UserRole)
+        item_path = item.data(4, Qt.ItemDataRole.UserRole)
         item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
         if not item_path:
             return
@@ -189,7 +223,7 @@ class ProjectViewController(QObject):
 
         exclude_action = menu.addAction("Exclude from Export")
         include_action = menu.addAction("Include in Export")
-
+    
         # Connect actions to handlers that operate on the entire selection
         exclude_action.triggered.connect(self._on_context_exclude)
         include_action.triggered.connect(self._on_context_include)
@@ -216,7 +250,7 @@ class ProjectViewController(QObject):
         paths_were_added = False
 
         for item in selected_items:
-            full_path = item.data(3, Qt.ItemDataRole.UserRole)
+            full_path = item.data(4, Qt.ItemDataRole.UserRole)
             item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
             if not full_path:
                 continue
@@ -245,7 +279,7 @@ class ProjectViewController(QObject):
         # Collect all possible path formats to remove for the selected items
         paths_to_remove = set()
         for item in selected_items:
-            full_path = item.data(3, Qt.ItemDataRole.UserRole)
+            full_path = item.data(4, Qt.ItemDataRole.UserRole)
             if not full_path:
                 continue
 
@@ -261,7 +295,7 @@ class ProjectViewController(QObject):
         if len(updated_exclusive) < original_count:
             self._view.set_filters_text(inclusive, updated_exclusive)
             self._on_apply_filters()
-
+    
     def _calculate_export_stats(self, node: dict) -> tuple[int, int, int]:
         """Recursively traverses the filtered tree to calculate file stats."""
         included_count = 0

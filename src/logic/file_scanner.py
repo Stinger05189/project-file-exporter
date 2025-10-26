@@ -31,8 +31,10 @@ class FileScanner:
                 "path": path,
                 "name": os.path.basename(path),
                 "type": "directory",
-                "children": []
+                "children": [],
+                "size": 0
             }
+            total_size = 0
             try:
                 for entry in os.scandir(path):
                     # Performance improvement: completely skip blacklisted paths
@@ -40,16 +42,27 @@ class FileScanner:
                         continue
                     
                     if entry.is_dir():
-                        node["children"].append(_scan(entry.path))
+                        child_node = _scan(entry.path)
+                        total_size += child_node.get("size", 0)
+                        node["children"].append(child_node)
                     else:
+                        try:
+                            file_size = entry.stat().st_size
+                        except OSError:
+                            file_size = 0
+                        
+                        total_size += file_size
                         node["children"].append({
                             "path": entry.path,
                             "name": entry.name,
                             "type": "file",
+                            "size": file_size,
                             "children": []
                         })
             except OSError as e:
                 print(f"Error scanning directory {path}: {e}")
+            
+            node["size"] = total_size
             return node
 
         return _scan(root_path)
