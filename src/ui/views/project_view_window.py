@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter, QLabel,
     QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator
 )
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, QByteArray
 
 class PathDelegate(QStyledItemDelegate):
     """A delegate to render HTML in a specific column of the QTreeWidget."""
@@ -61,8 +61,8 @@ class ProjectViewWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
 
         # --- Splitter for two-pane layout ---
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_layout.addWidget(splitter)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_layout.addWidget(self.splitter)
 
         # --- Left Pane: Configuration ---
         config_panel = QWidget()
@@ -95,9 +95,9 @@ class ProjectViewWindow(QMainWindow):
         self.file_tree_widget.setItemDelegateForColumn(3, PathDelegate(self.file_tree_widget))
 
         # Add panes to splitter
-        splitter.addWidget(config_panel)
-        splitter.addWidget(self.file_tree_widget)
-        splitter.setSizes([300, 600])
+        self.splitter.addWidget(config_panel)
+        self.splitter.addWidget(self.file_tree_widget)
+        self.splitter.setSizes([300, 600])
 
         # Colors for styling
         self.excluded_brush = QBrush(QColor("#888888"))
@@ -169,12 +169,21 @@ class ProjectViewWindow(QMainWindow):
         path_text = node["path"]
         tree_item.setData(3, Qt.ItemDataRole.UserRole, path_text)
 
+        base_color = self.palette().color(self.palette().ColorRole.Text).name()
+        html_path = f"<font color='{base_color}'>"
+
         slash_colored = path_text.replace(os.sep, f"<font color='{self.path_slash_color}'>{os.sep}</font>")
         if node["type"] == "file":
             name, ext = os.path.splitext(slash_colored)
             if ext:
-                slash_colored = f"{name}<font color='{self.path_ext_color}'>{ext}</font>"
-        tree_item.setText(3, slash_colored)
+                html_path += f"{name}<font color='{self.path_ext_color}'>{ext}</font>"
+            else:
+                html_path += name
+        else:
+            html_path += slash_colored
+
+        html_path += "</font>"
+        tree_item.setText(3, html_path)
 
         if node.get("status") == "excluded":
             for i in range(tree_item.columnCount()):
@@ -230,3 +239,27 @@ class ProjectViewWindow(QMainWindow):
             size_str = f"{total_size_bytes / 1024**3:.2f} GB"
         
         self.size_label.setText(f"Total Size: {size_str}")
+
+    def get_ui_state(self) -> Dict[str, Any]:
+        """Gathers the current UI state into a dictionary for serialization."""
+        return {
+            "window_geometry": self.saveGeometry().toHex().data().decode('ascii'),
+            "splitter_sizes": self.splitter.sizes(),
+            "tree_header_state": self.file_tree_widget.header().saveState().toHex().data().decode('ascii'),
+            "expanded_paths": sorted(list(self.get_expanded_item_paths())) # sort for consistent serialization
+        }
+
+    def apply_ui_state(self, state: Dict[str, Any]):
+        """Applies a saved UI state dictionary to the window and its widgets."""
+        if state:
+            geometry = state.get("window_geometry")
+            if geometry:
+                self.restoreGeometry(QByteArray.fromHex(geometry.encode('ascii')))
+            
+            splitter_sizes = state.get("splitter_sizes")
+            if splitter_sizes and len(splitter_sizes) == 2:
+                self.splitter.setSizes(splitter_sizes)
+
+            header_state = state.get("tree_header_state")
+            if header_state:
+                self.file_tree_widget.header().restoreState(QByteArray.fromHex(header_state.encode('ascii')))

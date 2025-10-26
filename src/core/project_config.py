@@ -14,6 +14,7 @@ class ProjectConfig:
         self.exclusive_filters: List[str] = []
         self.config_file_path: str = ""
         self.extension_overrides: Dict[str, str] = {}
+        self.ui_state: Dict[str, Any] = {}
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the project's configuration into a dictionary."""
@@ -23,6 +24,7 @@ class ProjectConfig:
             "inclusive_filters": self.inclusive_filters,
             "exclusive_filters": self.exclusive_filters,
             "extension_overrides": self.extension_overrides,
+            "ui_state": self.ui_state,
         }
 
     @classmethod
@@ -32,5 +34,6 @@ class ProjectConfig:
         project.inclusive_filters = data.get("inclusive_filters", [])
         project.exclusive_filters = data.get("exclusive_filters", [])
         project.extension_overrides = data.get("extension_overrides", {})
+        project.ui_state = data.get("ui_state", {})
         project.config_file_path = file_path
         return project

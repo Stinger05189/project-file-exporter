@@ -36,8 +36,11 @@ class ProjectViewController(QObject):
             self._project_config.exclusive_filters
         )
         self._view.set_extension_overrides_text(self._project_config.extension_overrides)
-        self._on_apply_filters()
+        # Pass a flag to indicate this is the first load
+        self._on_apply_filters(is_initial_load=True)
         self._view.show()
+        # Apply window geometry, splitter state etc. after showing the window
+        self._view.apply_ui_state(self._project_config.ui_state)
     
     def _connect_signals(self):
         """Connects signals from the view to controller methods."""
@@ -48,10 +51,14 @@ class ProjectViewController(QObject):
         self._view.file_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self._view.closeEvent = self._on_close_event
 
-    def _on_apply_filters(self):
+    def _on_apply_filters(self, is_initial_load: bool = False):
         """Scans files, applies filters, and updates the tree view."""
-        # 1. Preserve the expanded state of the tree
-        expanded_paths = self._view.get_expanded_item_paths()
+        if not is_initial_load:
+            # 1. Preserve the expanded state of the tree on refresh
+            expanded_paths = self._view.get_expanded_item_paths()
+        else:
+            # On initial load, we will restore state from the config file
+            expanded_paths = set(self._project_config.ui_state.get("expanded_paths", []))
 
         inclusive, exclusive = self._view.get_filters()
         self._project_config.inclusive_filters = inclusive
@@ -116,6 +123,10 @@ class ProjectViewController(QObject):
 
     def _on_close_event(self, event):
         """Emits a signal when the window is closed."""
+        # Save the current UI state before closing
+        current_state = self._view.get_ui_state()
+        self._project_config.ui_state = current_state
+        self._config_manager.save_project(self._project_config)
         self.view_closed.emit()
         event.accept()
 
@@ -196,46 +207,65 @@ class ProjectViewController(QObject):
     def _show_help_dialog(self):
         """Displays a dialog with information on how to use filters."""
         help_text = """
-        <h2>Filter Syntax Guide</h2>
-        <p>Filters use <b>glob patterns</b> to include or exclude files and directories.</p>
-        
-        <h4>Key Rules</h4>
-        <ul>
-            <li><b>Exclusive filters always take precedence.</b> If a file matches both an inclusive and an exclusive pattern, it will be excluded.</li>
-            <li>If <b>no inclusive filters</b> are provided, all files are considered included by default (before exclusion rules are applied).</li>
-            <li>To match a directory, end the pattern with a forward slash (e.g., <code>__pycache__/</code>).</li>
-        </ul>
+        <html><head>
+            <style>
+                body { font-size: 10pt; color: #f0f0f0; }
+                h2 { color: #5294e2; border-bottom: 1px solid #555; padding-bottom: 5px; }
+                h4 { margin-top: 15px; margin-bottom: 5px; }
+                ul { padding-left: 20px; }
+                li { margin-bottom: 6px; }
+                code { 
+                    background-color: #4a4a4a; 
+                    padding: 2px 6px; 
+                    border-radius: 3px; 
+                    font-family: Consolas, "Courier New", monospace;
+                    color: #d0d0d0;
+                }
+            </style>
+        </head><body>
+            <h2>Filter Syntax Guide</h2>
+            <p>Filters use <b>glob patterns</b> to include or exclude files and directories.</p>
+            
+            <h4>Key Rules</h4>
+            <ul>
+                <li><b>Exclusive filters always take precedence.</b> If a file matches both an inclusive and an exclusive pattern, it will be <b>excluded</b>.</li>
+                <li>If <b>no inclusive filters</b> are provided, all files are considered included by default (before exclusion rules are applied).</li>
+                <li>To match a directory, end the pattern with a forward slash (e.g., <code>__pycache__/</code>).</li>
+            </ul>
 
-        <h4>Common Patterns</h4>
-        <table width="100%">
-            <tr>
-                <td width="30%"><code>*</code></td>
-                <td>Matches any sequence of characters in a single name.</td>
-            </tr>
-            <tr>
-                <td><code>*.py</code></td>
-                <td>Matches all files ending with <code>.py</code>.</td>
-            </tr>
-            <tr>
-                <td><code>?</code></td>
-                <td>Matches any single character.</td>
-            </tr>
-            <tr>
-                <td><code>[abc]</code></td>
-                <td>Matches one character from the set (a, b, or c).</td>
-            </tr>
-            <tr>
-                <td><code>**</code></td>
-                <td>Matches directories recursively. Must be used on its own in a path segment.</td>
-            </tr>
-        </table>
+            <h4>Common Patterns</h4>
+            <table>
+                <tr>
+                    <td width="100"><code>*</code></td>
+                    <td>Matches any sequence of characters in a name.</td>
+                </tr>
+                <tr>
+                    <td><code>?</code></td>
+                    <td>Matches any single character.</td>
+                </tr>
+                <tr>
+                    <td><code>[abc]</code></td>
+                    <td>Matches one character from the set (a, b, or c).</td>
+                </tr>
+                <tr>
+                    <td><code>**</code></td>
+                    <td>Matches directories recursively (e.g. <code>src/**/*.ui</code>).</td>
+                </tr>
+            </table>
 
-        <h4>Examples</h4>
-        <ul>
-            <li><code>src/**/*.ui</code> &mdash; Includes all <code>.ui</code> files within the <code>src</code> directory and all its subdirectories.</li>
-            <li><code>docs/</code> &mdash; Includes the entire <code>docs</code> directory.</li>
-            <li><code>.git/</code> &mdash; Excludes the Git metadata directory.</li>
-            <li><code>*.log</code> &mdash; Excludes all log files.</li>
-        </ul>
+            <h4>Examples</h4>
+            <ul>
+                <li><code>*.py</code> &mdash; Matches all files ending with <code>.py</code>.</li>
+                <li><code>assets/*.png</code> &mdash; Matches all PNGs directly inside the <code>assets</code> folder.</li>
+                <li><code>.git/</code> &mdash; Excludes the Git metadata directory.</li>
+                <li><code>*.log</code> &mdash; Excludes all log files.</li>
+            </ul>
+        </body></html>
         """
-        QMessageBox.information(self._view, "Filter Guide", help_text)
+        dialog = QMessageBox(self._view)
+        dialog.setWindowTitle("Filter Guide")
+        dialog.setText(help_text)
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.setMinimumSize(600, 500)
+        dialog.exec()
