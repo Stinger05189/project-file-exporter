@@ -45,6 +45,9 @@ class ProjectViewWindow(QMainWindow):
         form_layout.addRow(QLabel("Inclusive Filters (one per line):"), self.inclusive_filters_textbox)
         form_layout.addRow(QLabel("Exclusive Filters (one per line):"), self.exclusive_filters_textbox)
         
+        self.extension_overrides_textbox = QTextEdit()
+        form_layout.addRow(QLabel("Extension Overrides (e.g., svg:xml):"), self.extension_overrides_textbox)
+
         self.apply_filters_button = QPushButton("Apply Filters & Refresh Tree")
         
         config_layout.addLayout(form_layout)
@@ -56,6 +59,7 @@ class ProjectViewWindow(QMainWindow):
         self.file_tree_widget.setHeaderLabels(["Name", "Status", "Path"])
         self.file_tree_widget.setColumnWidth(0, 250)
         self.file_tree_widget.setColumnWidth(1, 80)
+        self.file_tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         # Add panes to splitter
         splitter.addWidget(config_panel)
@@ -78,6 +82,24 @@ class ProjectViewWindow(QMainWindow):
         """Sets the text in the filter boxes."""
         self.inclusive_filters_textbox.setPlainText("\n".join(inclusive))
         self.exclusive_filters_textbox.setPlainText("\n".join(exclusive))
+    
+    def get_extension_overrides(self) -> Dict[str, str]:
+        """Parses the extension overrides textbox and returns a dictionary."""
+        overrides = {}
+        lines = self.extension_overrides_textbox.toPlainText().splitlines()
+        for line in lines:
+            if ':' in line:
+                parts = line.split(':', 1)
+                source_ext = parts[0].strip().lower()
+                target_ext = parts[1].strip().lower()
+                if source_ext and target_ext:
+                    overrides[source_ext] = target_ext
+        return overrides
+
+    def set_extension_overrides_text(self, overrides: Dict[str, str]):
+        """Sets the text in the extension overrides box from a dictionary."""
+        lines = [f"{source}:{target}" for source, target in overrides.items()]
+        self.extension_overrides_textbox.setPlainText("\n".join(lines))
 
     def populate_file_tree(self, filtered_tree: Dict[str, Any]):
         """Clears and rebuilds the file tree widget based on filtered data."""

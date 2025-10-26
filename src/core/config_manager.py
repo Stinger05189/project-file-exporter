@@ -4,23 +4,29 @@
 import os
 import json
 from typing import Dict, List
+import sys
 
 from src.core.project_config import ProjectConfig
 
 class ConfigManager:
     """Handles the loading, saving, and management of all project configuration files."""
 
-    def __init__(self, projects_dir: str = "projects"):
-        """
-        Initializes the ConfigManager.
-
-        Args:
-            projects_dir (str): The directory where project .json files are stored.
-        """
-        self.projects_directory = projects_dir
+    def __init__(self):
+        """Initializes the ConfigManager."""
+        self.projects_directory = self._get_app_config_dir()
         self.projects: Dict[str, ProjectConfig] = {}
         if not os.path.exists(self.projects_directory):
             os.makedirs(self.projects_directory)
+
+    def _get_app_config_dir(self) -> str:
+        """Returns the appropriate user-specific config directory for the OS."""
+        app_name = "ProjectFileExporter"
+        if sys.platform == "win32":
+            # Windows: %APPDATA%\ProjectFileExporter\Projects
+            return os.path.join(os.environ['APPDATA'], app_name, 'Projects')
+        else:
+            # macOS/Linux: ~/.config/ProjectFileExporter/Projects
+            return os.path.join(os.path.expanduser('~'), '.config', app_name, 'Projects')
 
     def load_projects(self):
         """Scans the projects directory, parses .json files, and populates the projects dictionary."""

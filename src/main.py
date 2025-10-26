@@ -17,7 +17,7 @@ def main():
     app = QApplication(sys.argv)
 
     # Initialize the core components
-    config_manager = ConfigManager(projects_dir="projects")
+    config_manager = ConfigManager()
     config_manager.load_projects()
 
     # Initialize the main controller, which creates the main window
