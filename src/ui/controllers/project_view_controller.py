@@ -156,23 +156,29 @@ class ProjectViewController(QObject):
 
     def _on_context_menu(self, point):
         """Shows a context menu for the clicked tree item."""
+        # Ensure the clicked item is selected to provide a good user experience,
+        # otherwise the context menu might apply to an old selection.
         item = self._view.file_tree_widget.itemAt(point)
         if not item:
             return
+        
+        # This logic ensures that if you right-click an unselected item, it becomes
+        # the *only* selected item. If you right-click an already selected item,
+        # the selection remains unchanged.
+        if not item.isSelected():
+            self._view.file_tree_widget.clearSelection()
+            item.setSelected(True)
 
-        # Path is stored in UserRole on the path column (index 3)
+        # Retrieve data from the item that was actually clicked
         item_path = item.data(3, Qt.ItemDataRole.UserRole)
-        # Type is stored in a custom UserRole on the name column (index 0)
         item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
         if not item_path:
             return
-        
-        relative_path = os.path.relpath(item_path, self._project_config.root_path)
 
         menu = QMenu()
         
-        # Add expand/collapse options for directories
-        if item_type == "directory":
+        # Add expand/collapse options for directories, only if a single directory is selected
+        if item_type == "directory" and len(self._view.file_tree_widget.selectedItems()) == 1:
             if item.isExpanded():
                 collapse_action = menu.addAction("Collapse All")
                 collapse_action.triggered.connect(lambda: self._on_expand_collapse_all(item, expand=False))
@@ -184,8 +190,9 @@ class ProjectViewController(QObject):
         exclude_action = menu.addAction("Exclude from Export")
         include_action = menu.addAction("Include in Export")
 
-        exclude_action.triggered.connect(lambda: self._on_context_exclude(relative_path))
-        include_action.triggered.connect(lambda: self._on_context_include(relative_path))
+        # Connect actions to handlers that operate on the entire selection
+        exclude_action.triggered.connect(self._on_context_exclude)
+        include_action.triggered.connect(self._on_context_include)
         
         menu.exec(self._view.file_tree_widget.mapToGlobal(point))
 
@@ -198,31 +205,60 @@ class ProjectViewController(QObject):
             item.setExpanded(expand)
             iterator += 1
 
-    def _on_context_exclude(self, relative_path_to_exclude: str):
-        """Adds an item's path to the exclusive filters."""
-        # Normalize path for consistency
-        path_to_add = relative_path_to_exclude.replace(os.sep, '/')
-        if os.path.isdir(os.path.join(self._project_config.root_path, relative_path_to_exclude)):
-            path_to_add += '/' # Add trailing slash for directories
+    def _on_context_exclude(self):
+        """Adds the paths of all selected items to the exclusive filters."""
+        selected_items = self._view.file_tree_widget.selectedItems()
+        if not selected_items:
+            return
 
         inclusive, exclusive = self._view.get_filters()
-        
-        if path_to_add not in exclusive:
-            exclusive.append(path_to_add)
-            self._view.set_filters_text(inclusive, exclusive)
+        exclusive_set = set(exclusive)
+        paths_were_added = False
+
+        for item in selected_items:
+            full_path = item.data(3, Qt.ItemDataRole.UserRole)
+            item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if not full_path:
+                continue
+            
+            relative_path = os.path.relpath(full_path, self._project_config.root_path)
+            path_to_add = relative_path.replace(os.sep, '/')
+            if item_type == "directory":
+                path_to_add += '/'
+
+            if path_to_add not in exclusive_set:
+                exclusive_set.add(path_to_add)
+                paths_were_added = True
+
+        if paths_were_added:
+            self._view.set_filters_text(inclusive, sorted(list(exclusive_set)))
             self._on_apply_filters()
 
-    def _on_context_include(self, relative_path_to_include: str):
-        """Removes an item's path from the exclusive filters."""
-        path_to_remove = relative_path_to_include.replace(os.sep, '/')
-        dir_path_to_remove = path_to_remove + '/'
-
+    def _on_context_include(self):
+        """Removes the paths of all selected items from the exclusive filters."""
+        selected_items = self._view.file_tree_widget.selectedItems()
+        if not selected_items:
+            return
+            
         inclusive, exclusive = self._view.get_filters()
-
-        # Check for both file and directory formats and remove them
-        updated_exclusive = [p for p in exclusive if p != path_to_remove and p != dir_path_to_remove]
         
-        if len(updated_exclusive) < len(exclusive):
+        # Collect all possible path formats to remove for the selected items
+        paths_to_remove = set()
+        for item in selected_items:
+            full_path = item.data(3, Qt.ItemDataRole.UserRole)
+            if not full_path:
+                continue
+
+            relative_path = os.path.relpath(full_path, self._project_config.root_path)
+            path_as_file = relative_path.replace(os.sep, '/')
+            path_as_dir = path_as_file + '/'
+            paths_to_remove.add(path_as_file)
+            paths_to_remove.add(path_as_dir)
+        
+        original_count = len(exclusive)
+        updated_exclusive = [p for p in exclusive if p not in paths_to_remove]
+        
+        if len(updated_exclusive) < original_count:
             self._view.set_filters_text(inclusive, updated_exclusive)
             self._on_apply_filters()
 

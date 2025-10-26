@@ -51,24 +51,38 @@ class ProjectListController:
 
     def _on_remove_project(self):
         """Handles the 'Remove Project' button click."""
-        project_name = self._view.get_selected_project_name()
-        if not project_name:
+        project_names = self._view.get_selected_project_names()
+        if not project_names:
             return
+
+        # Adjust confirmation message for single vs. multiple projects
+        if len(project_names) == 1:
+            title = "Confirm Deletion"
+            message = f"Are you sure you want to permanently delete the project '{project_names[0]}'?"
+        else:
+            title = "Confirm Multiple Deletions"
+            message = f"Are you sure you want to permanently delete these {len(project_names)} projects?"
 
         reply = QMessageBox.question(
             self._view,
-            "Confirm Deletion",
-            f"Are you sure you want to permanently delete the project '{project_name}'?",
+            title,
+            message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            try:
-                self._config_manager.remove_project(project_name)
-                self._update_project_list()
-            except ValueError as e:
-                QMessageBox.warning(self._view, "Error", str(e))
+            errors = []
+            for project_name in project_names:
+                try:
+                    self._config_manager.remove_project(project_name)
+                except ValueError as e:
+                    errors.append(str(e))
+            
+            self._update_project_list()
+
+            if errors:
+                QMessageBox.warning(self._view, "Error", "Some projects could not be removed:\n\n" + "\n".join(errors))
 
     def _on_open_project(self):
         """Handles the 'Open Project' button click."""

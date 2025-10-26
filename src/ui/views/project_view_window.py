@@ -8,7 +8,7 @@ from PyQt6.QtGui import QAction, QColor, QBrush, QPainter, QTextDocument, QIcon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter, QLabel,
-    QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator
+    QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator, QAbstractItemView
 )
 from PyQt6.QtCore import Qt, QRectF, QByteArray
 from src.utils import resource_path
@@ -99,6 +99,8 @@ class ProjectViewWindow(QMainWindow):
         self.file_tree_widget.setColumnWidth(1, 100)
         self.file_tree_widget.setColumnWidth(2, 80)
         self.file_tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        # Allow multiple items to be selected with Shift/Ctrl modifiers
+        self.file_tree_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         
         # Apply the custom delegate to the Path column (index 3)
         self.file_tree_widget.setItemDelegateForColumn(3, PathDelegate(self.file_tree_widget))
