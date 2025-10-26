@@ -1,7 +1,7 @@
 # src/ui/views/project_view_window.py
 # Copyright (c) 2025 Google. All rights reserved.
 
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 
 from PyQt6.QtGui import QAction, QColor, QBrush
 from PyQt6.QtWidgets import (

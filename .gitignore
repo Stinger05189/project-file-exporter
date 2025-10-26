@@ -1,0 +1,31 @@
+# Bytecode files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE specific files
+.vscode/
+.idea/
+*.sln
+*.swp
+*.log
+
+# Virtual environment
+venv/
+env/
+.venv/
+envs/
+
+# Local configuration files
+*.ini
+*.cfg
+*.conf
+*.log
+
+# OS specific files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Project specific files
+projects/

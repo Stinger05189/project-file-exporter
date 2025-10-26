@@ -2,6 +2,10 @@
 # Copyright (c) 2025 Google. All rights reserved.
 
 import sys
+# os is no longer needed here
+
+# The sys.path modification is no longer needed with corrected imports.
+
 from PyQt6.QtWidgets import QApplication
 
 from src.core.config_manager import ConfigManager
