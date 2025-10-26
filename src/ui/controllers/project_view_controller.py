@@ -44,11 +44,15 @@ class ProjectViewController(QObject):
         self._view.apply_filters_button.clicked.connect(self._on_apply_filters)
         self._view.back_action.triggered.connect(self._on_back)
         self._view.export_action.triggered.connect(self._on_export)
+        self._view.help_action.triggered.connect(self._show_help_dialog)
         self._view.file_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self._view.closeEvent = self._on_close_event
 
     def _on_apply_filters(self):
         """Scans files, applies filters, and updates the tree view."""
+        # 1. Preserve the expanded state of the tree
+        expanded_paths = self._view.get_expanded_item_paths()
+
         inclusive, exclusive = self._view.get_filters()
         self._project_config.inclusive_filters = inclusive
         self._project_config.exclusive_filters = exclusive
@@ -67,11 +71,20 @@ class ProjectViewController(QObject):
                 inclusive,
                 exclusive
             )
-            self._view.populate_file_tree(self._filtered_tree)
+            # 2. Repopulate the tree, passing overrides for visual feedback
+            self._view.populate_file_tree(self._filtered_tree, overrides)
+
+            # 3. Restore the expanded state
+            self._view.apply_expanded_state(expanded_paths)
+
+            # 4. Calculate stats and update status bar
+            included, excluded, size = self._calculate_export_stats(self._filtered_tree)
+            self._view.update_status_bar(included, excluded, size)
         except ValueError as e:
             QMessageBox.critical(self._view, "Error Scanning Directory", str(e))
             self._filtered_tree = {}
-            self._view.populate_file_tree({})
+            self._view.populate_file_tree({}, {})
+            self._view.update_status_bar(0, 0, 0)
     
     def _on_export(self):
         """Handles the 'Export' action."""
@@ -86,21 +99,13 @@ class ProjectViewController(QObject):
                 self._project_config.extension_overrides
             )
             
-            msg_box = QMessageBox(self._view)
-            msg_box.setIcon(QMessageBox.Icon.Information)
-            msg_box.setText("Export Complete")
-            msg_box.setInformativeText(f"Files have been exported to:\n{temp_dir}")
-            open_button = msg_box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
-            msg_box.addButton(QMessageBox.StandardButton.Ok)
-            msg_box.exec()
-
-            if msg_box.clickedButton() == open_button:
-                if sys.platform == "win32":
-                    os.startfile(temp_dir)
-                elif sys.platform == "darwin": # macOS
-                    subprocess.run(["open", temp_dir])
-                else: # Linux
-                    subprocess.run(["xdg-open", temp_dir])
+            # Automatically open the folder without a dialog
+            if sys.platform == "win32":
+                os.startfile(temp_dir)
+            elif sys.platform == "darwin": # macOS
+                subprocess.run(["open", temp_dir], check=True)
+            else: # Linux
+                subprocess.run(["xdg-open", temp_dir], check=True)
 
         except Exception as e:
             QMessageBox.critical(self._view, "Export Error", f"An unexpected error occurred during export:\n{e}")
@@ -120,8 +125,11 @@ class ProjectViewController(QObject):
         if not item:
             return
 
-        # Path is in the 3rd column (index 2)
-        item_path = item.text(2)
+        # Path is now stored in UserRole data on the path column (index 3)
+        item_path = item.data(3, Qt.ItemDataRole.UserRole)
+        if not item_path:
+            return
+        
         relative_path = os.path.relpath(item_path, self._project_config.root_path)
 
         menu = QMenu()
@@ -160,3 +168,74 @@ class ProjectViewController(QObject):
         if len(updated_exclusive) < len(exclusive):
             self._view.set_filters_text(inclusive, updated_exclusive)
             self._on_apply_filters()
+
+    def _calculate_export_stats(self, node: dict) -> tuple[int, int, int]:
+        """Recursively traverses the filtered tree to calculate file stats."""
+        included_count = 0
+        excluded_count = 0
+        total_size = 0
+
+        if node["type"] == "file":
+            if node.get("status") == "included":
+                included_count += 1
+                try:
+                    total_size += os.path.getsize(node["path"])
+                except OSError:
+                    pass # File might be inaccessible
+            else:
+                excluded_count += 1
+        
+        for child in node.get("children", []):
+            i_count, e_count, size = self._calculate_export_stats(child)
+            included_count += i_count
+            excluded_count += e_count
+            total_size += size
+            
+        return included_count, excluded_count, total_size
+
+    def _show_help_dialog(self):
+        """Displays a dialog with information on how to use filters."""
+        help_text = """
+        <h2>Filter Syntax Guide</h2>
+        <p>Filters use <b>glob patterns</b> to include or exclude files and directories.</p>
+        
+        <h4>Key Rules</h4>
+        <ul>
+            <li><b>Exclusive filters always take precedence.</b> If a file matches both an inclusive and an exclusive pattern, it will be excluded.</li>
+            <li>If <b>no inclusive filters</b> are provided, all files are considered included by default (before exclusion rules are applied).</li>
+            <li>To match a directory, end the pattern with a forward slash (e.g., <code>__pycache__/</code>).</li>
+        </ul>
+
+        <h4>Common Patterns</h4>
+        <table width="100%">
+            <tr>
+                <td width="30%"><code>*</code></td>
+                <td>Matches any sequence of characters in a single name.</td>
+            </tr>
+            <tr>
+                <td><code>*.py</code></td>
+                <td>Matches all files ending with <code>.py</code>.</td>
+            </tr>
+            <tr>
+                <td><code>?</code></td>
+                <td>Matches any single character.</td>
+            </tr>
+            <tr>
+                <td><code>[abc]</code></td>
+                <td>Matches one character from the set (a, b, or c).</td>
+            </tr>
+            <tr>
+                <td><code>**</code></td>
+                <td>Matches directories recursively. Must be used on its own in a path segment.</td>
+            </tr>
+        </table>
+
+        <h4>Examples</h4>
+        <ul>
+            <li><code>src/**/*.ui</code> &mdash; Includes all <code>.ui</code> files within the <code>src</code> directory and all its subdirectories.</li>
+            <li><code>docs/</code> &mdash; Includes the entire <code>docs</code> directory.</li>
+            <li><code>.git/</code> &mdash; Excludes the Git metadata directory.</li>
+            <li><code>*.log</code> &mdash; Excludes all log files.</li>
+        </ul>
+        """
+        QMessageBox.information(self._view, "Filter Guide", help_text)

@@ -2,14 +2,41 @@
 # Copyright (c) 2025 Google. All rights reserved.
 
 from typing import Dict, Any, Tuple, List
+import os
 
-from PyQt6.QtGui import QAction, QColor, QBrush
+from PyQt6.QtGui import QAction, QColor, QBrush, QPainter, QTextDocument
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter, QLabel,
-    QFormLayout
+    QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRectF
+
+class PathDelegate(QStyledItemDelegate):
+    """A delegate to render HTML in a specific column of the QTreeWidget."""
+    def paint(self, painter: QPainter, option, index):
+        if index.column() == 3: # Path column
+            # To render rich text, we must handle the painting ourselves
+            painter.save()
+            
+            doc = QTextDocument()
+            doc.setHtml(index.model().data(index))
+            
+            # Ensure the document fits within the option rectangle
+            option.text = "" # We draw the text ourselves
+            self.parent().style().drawControl(self.parent().style().ControlElement.CE_ItemViewItem, option, painter, self.parent())
+
+            # Adjust for padding and alignment
+            text_rect = QRectF(option.rect)
+            text_rect.adjust(5, 0, 0, 0) 
+            
+            painter.translate(text_rect.topLeft())
+            doc.drawContents(painter)
+            
+            painter.restore()
+        else:
+            # For all other columns, use the default painter
+            super().paint(painter, option, index)
 
 class ProjectViewWindow(QMainWindow):
     """Defines the UI for the main project workspace."""
@@ -17,14 +44,16 @@ class ProjectViewWindow(QMainWindow):
     def __init__(self, project_name: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Project View - {project_name}")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(900, 700)
 
         # --- Toolbar ---
         toolbar = self.addToolBar("Main Toolbar")
         self.back_action = QAction("Back to Projects", self)
         self.export_action = QAction("Export Files...", self)
+        self.help_action = QAction("Help", self)
         toolbar.addAction(self.back_action)
         toolbar.addAction(self.export_action)
+        toolbar.addAction(self.help_action)
 
         # --- Central Widget & Layout ---
         central_widget = QWidget()
@@ -56,18 +85,34 @@ class ProjectViewWindow(QMainWindow):
 
         # --- Right Pane: File Tree Visualization ---
         self.file_tree_widget = QTreeWidget()
-        self.file_tree_widget.setHeaderLabels(["Name", "Status", "Path"])
-        self.file_tree_widget.setColumnWidth(0, 250)
-        self.file_tree_widget.setColumnWidth(1, 80)
+        self.file_tree_widget.setHeaderLabels(["Name", "Override", "Status", "Path"])
+        self.file_tree_widget.setColumnWidth(0, 280)
+        self.file_tree_widget.setColumnWidth(1, 100)
+        self.file_tree_widget.setColumnWidth(2, 80)
         self.file_tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        
+        # Apply the custom delegate to the Path column (index 3)
+        self.file_tree_widget.setItemDelegateForColumn(3, PathDelegate(self.file_tree_widget))
 
         # Add panes to splitter
         splitter.addWidget(config_panel)
         splitter.addWidget(self.file_tree_widget)
-        splitter.setSizes([250, 550])
+        splitter.setSizes([300, 600])
 
-        # Colors for excluded items
-        self.excluded_brush = QBrush(QColor("gray"))
+        # Colors for styling
+        self.excluded_brush = QBrush(QColor("#888888"))
+        self.override_brush = QBrush(QColor("#00FFFF"))
+        self.path_slash_color = "#808080"
+        self.path_ext_color = "#FFC66D"
+
+        # --- Status Bar ---
+        self.statusBar()
+        self.included_label = QLabel("Included: 0")
+        self.excluded_label = QLabel("Excluded: 0")
+        self.size_label = QLabel("Total Size: 0 B")
+        self.statusBar().addPermanentWidget(self.included_label)
+        self.statusBar().addPermanentWidget(self.excluded_label)
+        self.statusBar().addPermanentWidget(self.size_label)
 
     def get_filters(self) -> Tuple[List[str], List[str]]:
         """Returns the current text from the filter textboxes as lists of strings."""
@@ -101,16 +146,16 @@ class ProjectViewWindow(QMainWindow):
         lines = [f"{source}:{target}" for source, target in overrides.items()]
         self.extension_overrides_textbox.setPlainText("\n".join(lines))
 
-    def populate_file_tree(self, filtered_tree: Dict[str, Any]):
+    def populate_file_tree(self, filtered_tree: Dict[str, Any], overrides: Dict[str, str]):
         """Clears and rebuilds the file tree widget based on filtered data."""
         self.file_tree_widget.clear()
         if not filtered_tree:
             return
         
-        self._add_tree_item(None, filtered_tree)
+        self._add_tree_item(None, filtered_tree, overrides)
         self.file_tree_widget.expandToDepth(0)
 
-    def _add_tree_item(self, parent_item: QTreeWidgetItem | None, node: Dict[str, Any]):
+    def _add_tree_item(self, parent_item: QTreeWidgetItem | None, node: Dict[str, Any], overrides: Dict[str, str]):
         """Recursively adds an item to the tree widget."""
         if parent_item is None:
             tree_item = QTreeWidgetItem(self.file_tree_widget)
@@ -118,12 +163,70 @@ class ProjectViewWindow(QMainWindow):
             tree_item = QTreeWidgetItem(parent_item)
             
         tree_item.setText(0, node["name"])
-        tree_item.setText(1, node.get("status", "unknown"))
-        tree_item.setText(2, node["path"])
+        tree_item.setText(2, node.get("status", "unknown"))
+
+        # Store raw path in UserRole, and display HTML path in the column
+        path_text = node["path"]
+        tree_item.setData(3, Qt.ItemDataRole.UserRole, path_text)
+
+        slash_colored = path_text.replace(os.sep, f"<font color='{self.path_slash_color}'>{os.sep}</font>")
+        if node["type"] == "file":
+            name, ext = os.path.splitext(slash_colored)
+            if ext:
+                slash_colored = f"{name}<font color='{self.path_ext_color}'>{ext}</font>"
+        tree_item.setText(3, slash_colored)
 
         if node.get("status") == "excluded":
             for i in range(tree_item.columnCount()):
                 tree_item.setForeground(i, self.excluded_brush)
         
+        # Handle Extension Overrides in the "Override" column
+        if node["type"] == "file":
+            _name_root, original_ext = os.path.splitext(node["name"])
+            clean_ext = original_ext.lstrip('.').lower()
+            if clean_ext in overrides:
+                target_ext = overrides[clean_ext]
+                tree_item.setText(1, f"{original_ext} -> .{target_ext}")
+                tree_item.setForeground(1, self.override_brush)
+        
         for child_node in node.get("children", []):
-            self._add_tree_item(tree_item, child_node)
+            self._add_tree_item(tree_item, child_node, overrides)
+
+    def get_expanded_item_paths(self) -> set[str]:
+        """Returns a set of raw paths for all currently expanded items in the tree."""
+        expanded_paths = set()
+        iterator = QTreeWidgetItemIterator(self.file_tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if item.isExpanded():
+                path = item.data(3, Qt.ItemDataRole.UserRole)
+                if path:
+                    expanded_paths.add(path)
+            iterator += 1
+        return expanded_paths
+
+    def apply_expanded_state(self, expanded_paths: set[str]):
+        """Expands all tree items whose raw paths are in the provided set."""
+        iterator = QTreeWidgetItemIterator(self.file_tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            raw_path = item.data(3, Qt.ItemDataRole.UserRole)
+            if raw_path in expanded_paths:
+                item.setExpanded(True)
+            iterator += 1
+
+    def update_status_bar(self, included_count: int, excluded_count: int, total_size_bytes: int):
+        """Updates the labels in the status bar with the latest file stats."""
+        self.included_label.setText(f"Included: {included_count}")
+        self.excluded_label.setText(f"Excluded: {excluded_count}")
+        
+        if total_size_bytes < 1024:
+            size_str = f"{total_size_bytes} B"
+        elif total_size_bytes < 1024**2:
+            size_str = f"{total_size_bytes / 1024:.2f} KB"
+        elif total_size_bytes < 1024**3:
+            size_str = f"{total_size_bytes / 1024**2:.2f} MB"
+        else:
+            size_str = f"{total_size_bytes / 1024**3:.2f} GB"
+        
+        self.size_label.setText(f"Total Size: {size_str}")
