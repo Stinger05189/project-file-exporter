@@ -6,23 +6,25 @@ Project-Based File Exporter is a desktop utility built with Python and PyQt6, de
 
 The application provides a robust set of features to streamline the file export workflow:
 
-*   **Project Management:**
-    *   Create and manage multiple projects, each linked to a specific source directory.
+*   **Advanced Project Management:**
+    *   A welcome **landing page** showing your most recently used projects for quick access.
+    *   A full **project browser** to view, sort, and manage all projects, with details like last opened date, export count, and included file count.
+    *   Create, remove, and **edit project names** through intuitive dialogs.
     *   Project configurations are saved automatically and centrally in the user's application data folder, not cluttered within the project directory.
+
+*   **Dynamic and Interactive File Tree:**
+    *   Visualize the entire source directory structure within the application.
+    *   **Live file watcher** automatically refreshes the tree when files are added, removed, or changed in your project's source directory.
+    *   Get immediate visual feedback on which files and folders are included or excluded based on the current filter rules (excluded items are grayed out).
+    *   Convenient toolbar actions to **open the project's source directory** or the final export directory.
 
 *   **Configurable Filtering:**
     *   **Inclusive Filters:** Specify which files or directories to include using glob patterns (e.g., `*.py`, `docs/`, `src/**/*.ui`).
     *   **Exclusive Filters:** Specify which files or directories to explicitly exclude (e.g., `__pycache__/`, `*.log`, `.git/`). Exclusive filters always take precedence.
-
-*   **Interactive File Tree:**
-    *   Visualize the entire source directory structure within the application.
-    *   Get immediate visual feedback on which files and folders are included or excluded based on the current filter rules (excluded items are grayed out).
-
-*   **Context Menu Operations:**
-    *   Right-click on any file or folder in the tree to instantly add it to the include or exclude list. The application updates the filter rules and refreshes the tree automatically.
+    *   **Context Menu Operations:** Right-click on any file or folder in the tree to instantly add it to the include or exclude list.
 
 *   **Smart Export Process:**
-    *   **Temporary Export Path:** Files are exported to a dedicated, temporary folder in the user's system.
+    *   **Temporary Export Path:** Files are exported to a dedicated, temporary folder.
     *   **Flattened Output:** All copied files reside in a single export folder for easy access.
     *   **Name Collision Resolution:** Automatically renames conflicting files by appending a sanitized version of their original path.
     *   **Extension Overrides:** Define rules to change file extensions during the export process (e.g., `.svg` to `.xml`).
@@ -43,7 +45,7 @@ cd project-file-exporter
 ```
 
 **2. Create a Virtual Environment**
-It is highly recommended to use a dedicated virtual environment to avoid conflicts with other projects.
+It is highly recommended to use a dedicated virtual environment to avoid conflicts.
 
 *   **Using Conda (Recommended):**
     ```bash
@@ -67,9 +69,9 @@ It is highly recommended to use a dedicated virtual environment to avoid conflic
     ```
 
 **3. Install Dependencies**
-With your environment active, install the required library:
+With your environment active, install the required libraries:
 ```bash
-pip install PyQt6
+pip install PyQt6 watchdog
 ```
 
 **4. Run the Application**
@@ -80,7 +82,7 @@ python -m src.main
 
 ## Building the Executable
 
-The project is configured to be packaged into a single, standalone executable (`.exe`) using PyInstaller.
+The project can be packaged into a single, standalone executable (`.exe` on Windows) using PyInstaller.
 
 **1. Install PyInstaller**
 If you haven't already, install PyInstaller into your active virtual environment:
@@ -88,12 +90,11 @@ If you haven't already, install PyInstaller into your active virtual environment
 pip install pyinstaller
 ```
 
-**2. Build Using the Spec File (Recommended)**
-This repository includes a pre-configured `Project-Based File Exporter.spec` file. This is the most reliable method as it contains all the necessary settings, including the application icon and data files.
+**2. Build Using the Command**
+From the project's root directory, run the following command. This will create a clean build with the application name, icon, and necessary data files included.
 
-From the project root directory, run:
 ```bash
-pyinstaller "Project-Based File Exporter.spec" --clean
+pyinstaller --name "Project-Based File Exporter" --onefile --windowed --clean --icon="assets/icon.ico" --add-data="assets/icon.ico;assets" src/main.py
 ```
 
 **3. Locate the Executable**
@@ -110,10 +111,10 @@ The application is designed using a **Model-View-Controller (MVC)** pattern to e
     *   The `logic` modules contain the stateless business logic for file scanning, filter application, and the export process.
 
 *   **View (`src/ui/views`):** This represents the user interface.
-    *   Built with PyQt6, these classes define the layout and widgets the user interacts with.
+    *   Built with PyQt6, these classes define the layout and widgets the user interacts with, including the landing page, project browser, and main project view.
 
 *   **Controller (`src/ui/controllers`):** This acts as the intermediary.
-    *   The controller classes listen for signals from the View, call the appropriate methods in the Model, and update the View with the results.
+    *   The controller classes (`LandingController`, `ProjectBrowserController`, `ProjectViewController`) listen for signals from the View, call the appropriate methods in the Model, and update the View with the results.
 
 #### **2. Configuration Management**
 
@@ -125,14 +126,11 @@ Project configurations are stored as `.json` files in a standard, OS-specific ap
 
 The core operational workflow of the application follows a clear, three-step pipeline:
 
-1.  **File System Scan (`FileScanner`):** When a project is opened or filters are applied, the `FileScanner` recursively traverses the project's source directory and builds an in-memory tree representation (as a nested dictionary) of all files and folders.
+1.  **File System Scan (`FileScanner`):** When a project is opened or filters are applied, the `FileScanner` recursively traverses the project's source directory and builds an in-memory tree representation of all files and folders.
 
-2.  **Filter Application (`FilterEngine`):** The `FilterEngine` takes this raw tree and iterates through every node. It applies the user-defined inclusive and exclusive filter patterns, marking each node as either `"included"` or `"excluded"`.
+2.  **Filter Application (`FilterEngine`):** The `FilterEngine` takes this raw tree and applies the user-defined inclusive and exclusive filter patterns, marking each node as either `"included"` or `"excluded"`.
 
-3.  **Export Execution (`ExportManager`):** When the user clicks "Export," the `ExportManager` receives the filtered tree and performs the final actions:
-    *   It creates a clean, temporary directory.
-    *   It collects a flat list of all file nodes marked as `"included"`.
-    *   It iterates through this list, applying any extension overrides and resolving name collisions before copying each file to the flattened temporary directory.
+3.  **Export Execution (`ExportManager`):** When the user clicks "Export," the `ExportManager` receives the filtered tree, resolves name collisions, applies extension overrides, and copies the included files to a clean temporary directory.
 
 ## File Structure
 ```
@@ -149,14 +147,16 @@ project-file-exporter/
 │   │   └── filter_engine.py
 │   ├── ui/
 │   │   ├── controllers/
-│   │   │   ├── project_list_controller.py
+│   │   │   ├── landing_controller.py
+│   │   │   ├── project_browser_controller.py
 │   │   │   └── project_view_controller.py
 │   │   └── views/
 │   │       ├── help_dialog.py
-│   │       ├── project_list_window.py
+│   │       ├── landing_window.py
+│   │       ├── project_browser_window.py
+│   │       ├── project_edit_dialog.py
 │   │       └── project_view_window.py
 │   ├── main.py
 │   └── utils.py
-├── Project-Based File Exporter.spec
 └── README.md
 ```

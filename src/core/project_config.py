@@ -2,6 +2,7 @@
 # Copyright (c) 2025 Google. All rights reserved.
 
 from typing import Dict, List, Any, Type
+from datetime import datetime
 
 # Sensible defaults for directories to ignore completely during the scan phase.
 DEFAULT_BLACKLIST = [
@@ -29,11 +30,15 @@ class ProjectConfig:
         self.root_path: str = root_path
         self.inclusive_filters: List[str] = []
         self.exclusive_filters: List[str] = []
-        # Add the new blacklisted paths with defaults
         self.blacklisted_paths: List[str] = DEFAULT_BLACKLIST[:]
         self.config_file_path: str = ""
         self.extension_overrides: Dict[str, str] = {}
         self.ui_state: Dict[str, Any] = {}
+        # New metadata fields
+        self.date_created: str = datetime.utcnow().isoformat()
+        self.last_opened: str = datetime.utcnow().isoformat()
+        self.export_count: int = 0
+        self.last_known_included_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the project's configuration into a dictionary."""
@@ -42,9 +47,14 @@ class ProjectConfig:
             "root_path": self.root_path,
             "inclusive_filters": self.inclusive_filters,
             "exclusive_filters": self.exclusive_filters,
-            "blacklisted_paths": self.blacklisted_paths, # Serialize new field
+            "blacklisted_paths": self.blacklisted_paths,
             "extension_overrides": self.extension_overrides,
             "ui_state": self.ui_state,
+            # Serialize new metadata
+            "date_created": self.date_created,
+            "last_opened": self.last_opened,
+            "export_count": self.export_count,
+            "last_known_included_count": self.last_known_included_count,
         }
 
     @classmethod
@@ -53,9 +63,13 @@ class ProjectConfig:
         project = cls(data["project_name"], data["root_path"])
         project.inclusive_filters = data.get("inclusive_filters", [])
         project.exclusive_filters = data.get("exclusive_filters", [])
-        # Deserialize, providing defaults for backward compatibility
         project.blacklisted_paths = data.get("blacklisted_paths", DEFAULT_BLACKLIST[:])
         project.extension_overrides = data.get("extension_overrides", {})
         project.ui_state = data.get("ui_state", {})
         project.config_file_path = file_path
+        # Deserialize new metadata with defaults for backward compatibility
+        project.date_created = data.get("date_created", datetime.utcnow().isoformat())
+        project.last_opened = data.get("last_opened", datetime.utcnow().isoformat())
+        project.export_count = data.get("export_count", 0)
+        project.last_known_included_count = data.get("last_known_included_count", 0)
         return project

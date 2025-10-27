@@ -2,14 +2,11 @@
 # Copyright (c) 2025 Google. All rights reserved.
 
 import sys
-# os is no longer needed here
-
-# The sys.path modification is no longer needed with corrected imports.
 
 from PyQt6.QtWidgets import QApplication
 
 from src.core.config_manager import ConfigManager
-from src.ui.controllers.project_list_controller import ProjectListController
+from src.ui.controllers.landing_controller import LandingController
 
 DARK_THEME_QSS = """
 QWidget {
@@ -129,8 +126,8 @@ def main():
     config_manager = ConfigManager()
     config_manager.load_projects()
 
-    # Initialize the main controller, which creates the main window
-    main_controller = ProjectListController(config_manager)
+    # Initialize the main controller, which creates the landing window
+    main_controller = LandingController(config_manager)
 
     # Show the main window and start the application
     main_controller.show()

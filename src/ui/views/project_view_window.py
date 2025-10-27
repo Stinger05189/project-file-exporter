@@ -77,6 +77,7 @@ class ProjectViewWindow(QMainWindow):
         self.export_button = QPushButton("Export Files...")
         self.export_button.setObjectName("exportButton")
         
+        self.open_root_action = QAction("Open Root Folder", self)
         self.open_export_action = QAction("Open Export Folder", self)
         
         self.toggle_path_action = QAction("Show Full Paths", self)
@@ -89,6 +90,7 @@ class ProjectViewWindow(QMainWindow):
         toolbar.addAction(self.back_action)
         toolbar.addSeparator()
         toolbar.addWidget(self.export_button)
+        toolbar.addAction(self.open_root_action)
         toolbar.addAction(self.open_export_action)
         toolbar.addSeparator()
         toolbar.addAction(self.toggle_path_action)

@@ -72,6 +72,27 @@ class ConfigManager:
         else:
             raise ValueError(f"No project found with the name '{project_name}'.")
 
+    def rename_project(self, old_name: str, new_name: str):
+        """Renames a project, updating its config file and internal state."""
+        if new_name in self.projects and new_name != old_name:
+            raise ValueError(f"A project with the name '{new_name}' already exists.")
+
+        if old_name not in self.projects:
+            raise ValueError(f"No project found with the name '{old_name}'.")
+
+        # Get the project, remove the old file
+        project = self.projects[old_name]
+        if os.path.exists(project.config_file_path):
+            os.remove(project.config_file_path)
+
+        # Update the project object and save under a new name
+        project.project_name = new_name
+        self.save_project(project)
+
+        # Update the internal dictionary
+        del self.projects[old_name]
+        self.projects[new_name] = project
+
     def get_project(self, project_name: str) -> ProjectConfig:
         """Retrieves a specific ProjectConfig object by name."""
         return self.projects[project_name]

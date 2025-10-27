@@ -1,7 +1,7 @@
 # src/ui/controllers/project_view_controller.py
 # Copyright (c) 2025 Google. All rights reserved.
 
-from PyQt6.QtCore import pyqtSignal, QObject
+from PyQt6.QtCore import pyqtSignal, QObject, QTimer
 from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QMenu, QTreeWidgetItemIterator, QTreeWidgetItem
 )
@@ -9,7 +9,10 @@ import os
 import sys
 import subprocess
 import tempfile
+from datetime import datetime
 from PyQt6.QtCore import Qt
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 from src.core.config_manager import ConfigManager
 from src.core.project_config import ProjectConfig
@@ -19,9 +22,24 @@ from src.logic.file_scanner import FileScanner
 from src.logic.filter_engine import FilterEngine
 from src.logic.export_manager import ExportManager
 
+# Signal bridge to safely communicate from watchdog's thread to the GUI thread.
+class WatchdogEmitter(QObject):
+    """Emits a signal when a file system event occurs."""
+    file_changed = pyqtSignal()
+
+class ProjectChangeHandler(FileSystemEventHandler):
+    """A simple event handler that triggers a callback on any file system event."""
+    def __init__(self, emitter: WatchdogEmitter):
+        super().__init__()
+        self.emitter = emitter
+
+    def on_any_event(self, event):
+        """On any file system event, emit the file_changed signal."""
+        self.emitter.file_changed.emit()
+
 class ProjectViewController(QObject):
     """Manages the state and interactions of the ProjectViewWindow."""
-    
+
     view_closed = pyqtSignal()
 
     def __init__(self, project_config: ProjectConfig, config_manager: ConfigManager):
@@ -34,6 +52,20 @@ class ProjectViewController(QObject):
         # State for UI toggles
         self._show_full_path = False
         self._hide_excluded = False
+
+        # File watcher for automatic refreshes
+        self._observer = None
+        
+        # Setup for thread-safe signal-based watcher
+        self._watchdog_emitter = WatchdogEmitter()
+        self._watchdog_emitter.file_changed.connect(self._request_refresh)
+
+        # Debounce timer for file watcher to prevent excessive refreshes
+        self._refresh_timer = QTimer()
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(500) # 500 ms delay
+        self._refresh_timer.timeout.connect(lambda: self._on_apply_filters(is_auto_refresh=True))
+
         self._connect_signals()
 
     def show(self):
@@ -56,18 +88,25 @@ class ProjectViewController(QObject):
         self._view.show()
         # Apply window geometry, splitter state etc. after showing the window
         self._view.apply_ui_state(self._project_config.ui_state)
+
+        self._start_file_watcher()
     
     def _connect_signals(self):
         """Connects signals from the view to controller methods."""
         self._view.apply_filters_button.clicked.connect(self._on_apply_filters)
         self._view.back_action.triggered.connect(self._on_back)
         self._view.export_button.clicked.connect(self._on_export)
+        self._view.open_root_action.triggered.connect(self._on_open_root_path)
         self._view.open_export_action.triggered.connect(self._on_open_export_path)
         self._view.help_action.triggered.connect(self._show_help_dialog)
         self._view.toggle_path_action.triggered.connect(self._on_toggle_path_view)
         self._view.hide_excluded_action.triggered.connect(self._on_toggle_hide_excluded)
         self._view.file_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self._view.closeEvent = self._on_close_event
+
+    def _request_refresh(self):
+        """Safely starts the refresh timer from the main GUI thread."""
+        self._refresh_timer.start()
 
     def _on_toggle_path_view(self, checked: bool):
         """Handles the 'Show Full Paths' toggle action."""
@@ -79,7 +118,7 @@ class ProjectViewController(QObject):
         self._hide_excluded = checked
         self._on_apply_filters()
 
-    def _on_apply_filters(self, is_initial_load: bool = False):
+    def _on_apply_filters(self, is_initial_load: bool = False, is_auto_refresh: bool = False):
         """Scans files, applies filters, and updates the tree view."""
         if not is_initial_load:
             # 1. Preserve the expanded state of the tree on refresh
@@ -88,18 +127,19 @@ class ProjectViewController(QObject):
             # On initial load, we will restore state from the config file
             expanded_paths = set(self._project_config.ui_state.get("expanded_paths", []))
 
-        blacklist = self._view.get_blacklisted_paths()
-        self._project_config.blacklisted_paths = blacklist
+        # Only read from UI and save if the action was triggered by the user
+        if not is_auto_refresh:
+            blacklist = self._view.get_blacklisted_paths()
+            self._project_config.blacklisted_paths = blacklist
 
-        inclusive, exclusive = self._view.get_filters()
-        self._project_config.inclusive_filters = inclusive
-        self._project_config.exclusive_filters = exclusive
+            inclusive, exclusive = self._view.get_filters()
+            self._project_config.inclusive_filters = inclusive
+            self._project_config.exclusive_filters = exclusive
 
-        overrides = self._view.get_extension_overrides()
-        self._project_config.extension_overrides = overrides
-        
-        # Save the updated filters back to the config file
-        self._config_manager.save_project(self._project_config)
+            overrides = self._view.get_extension_overrides()
+            self._project_config.extension_overrides = overrides
+            
+            self._config_manager.save_project(self._project_config)
 
         try:
             raw_tree = FileScanner.scan_directory(
@@ -109,24 +149,29 @@ class ProjectViewController(QObject):
             self._filtered_tree = FilterEngine.apply_filters(
                 raw_tree,
                 self._project_config.root_path,
-                inclusive,
-                exclusive
+                self._project_config.inclusive_filters,
+                self._project_config.exclusive_filters
             )
             # 2. Repopulate the tree, passing all view state flags
             self._view.populate_file_tree(
                 self._filtered_tree,
-                overrides,
+                self._project_config.extension_overrides,
                 self._project_config.root_path,
                 self._show_full_path,
                 self._hide_excluded
             )
-
+    
             # 3. Restore the expanded state
             self._view.apply_expanded_state(expanded_paths)
 
             # 4. Calculate stats and update status bar
             included, excluded, size = self._calculate_export_stats(self._filtered_tree)
             self._view.update_status_bar(included, excluded, size)
+            
+            # 5. Update project metadata if triggered by user
+            if not is_auto_refresh:
+                 self._project_config.last_known_included_count = included
+
         except ValueError as e:
             QMessageBox.critical(self._view, "Error Scanning Directory", str(e))
             self._filtered_tree = {}
@@ -146,6 +191,10 @@ class ProjectViewController(QObject):
                 self._project_config.extension_overrides
             )
             
+            # Update and save export count metadata
+            self._project_config.export_count += 1
+            self._config_manager.save_project(self._project_config)
+            
             # Automatically open the folder without a dialog
             if sys.platform == "win32":
                 os.startfile(temp_dir)
@@ -157,6 +206,18 @@ class ProjectViewController(QObject):
         except Exception as e:
             QMessageBox.critical(self._view, "Export Error", f"An unexpected error occurred during export:\n{e}")
 
+    def _on_open_root_path(self):
+        """Opens the project's root source directory."""
+        try:
+            root_path = self._project_config.root_path
+            if sys.platform == "win32":
+                os.startfile(root_path)
+            elif sys.platform == "darwin": # macOS
+                subprocess.run(["open", root_path], check=True)
+            else: # Linux
+                subprocess.run(["xdg-open", root_path], check=True)
+        except Exception as e:
+            QMessageBox.critical(self._view, "Error", f"Could not open root directory:\n{e}")
 
     def _on_open_export_path(self):
         """Creates and opens the target export directory."""
@@ -179,6 +240,7 @@ class ProjectViewController(QObject):
 
     def _on_close_event(self, event):
         """Emits a signal when the window is closed."""
+        self._stop_file_watcher()
         # Save the current UI state before closing
         current_state = self._view.get_ui_state()
         current_state["show_full_path"] = self._show_full_path
@@ -355,3 +417,24 @@ Filters use **glob patterns** to include or exclude files and directories from t
 """
         dialog = HelpDialog(help_text, self._view)
         dialog.exec()
+
+    def _start_file_watcher(self):
+        """Initializes and starts the file system observer."""
+        if self._observer:
+            self._stop_file_watcher() # Ensure any existing observer is stopped
+
+        # Pass the thread-safe emitter to the handler.
+        handler = ProjectChangeHandler(self._watchdog_emitter)
+        self._observer = Observer()
+        self._observer.schedule(handler, self._project_config.root_path, recursive=True)
+        try:
+            self._observer.start()
+        except Exception as e:
+            print(f"Error starting file watcher: {e}")
+
+    def _stop_file_watcher(self):
+        """Stops and cleans up the file system observer."""
+        if self._observer and self._observer.is_alive():
+            self._observer.stop()
+            self._observer.join()
+        self._observer = None
