@@ -50,6 +50,7 @@ class ProjectBrowserWindow(QMainWindow):
         self.create_project_button = QPushButton("Create Project")
         self.remove_project_button = QPushButton("Remove Project(s)")
         self.edit_project_button = QPushButton("Edit Project")
+        self.duplicate_project_button = QPushButton("Duplicate Project")
         self.open_project_button = QPushButton("Open Project")
 
         # --- Layouts ---
@@ -57,6 +58,7 @@ class ProjectBrowserWindow(QMainWindow):
         button_layout.addWidget(self.create_project_button)
         button_layout.addWidget(self.remove_project_button)
         button_layout.addWidget(self.edit_project_button)
+        button_layout.addWidget(self.duplicate_project_button)
         button_layout.addStretch()
         button_layout.addWidget(self.open_project_button)
 
@@ -75,4 +77,5 @@ class ProjectBrowserWindow(QMainWindow):
         selected_count = len(self.project_tree_widget.selectedItems())
         self.open_project_button.setEnabled(selected_count == 1)
         self.edit_project_button.setEnabled(selected_count == 1)
+        self.duplicate_project_button.setEnabled(selected_count == 1)
         self.remove_project_button.setEnabled(selected_count > 0)

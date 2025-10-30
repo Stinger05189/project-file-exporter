@@ -7,7 +7,7 @@ Controller for the project browser window.
 
 from datetime import datetime
 from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtWidgets import QMessageBox, QTreeWidgetItem
+from PyQt6.QtWidgets import QMessageBox, QTreeWidgetItem, QInputDialog
 
 from src.core.config_manager import ConfigManager
 from src.ui.views.project_browser_window import ProjectBrowserWindow
@@ -36,6 +36,7 @@ class ProjectBrowserController(QObject):
         """Connects view signals to controller methods."""
         self._view.open_project_button.clicked.connect(self._on_open_project)
         self._view.edit_project_button.clicked.connect(self._on_edit_project)
+        self._view.duplicate_project_button.clicked.connect(self._on_duplicate_project)
         self._view.remove_project_button.clicked.connect(self._on_remove_project)
         self._view.create_project_button.clicked.connect(self._on_create_project)
         self._view.back_action.triggered.connect(self._on_back)
@@ -103,6 +104,28 @@ class ProjectBrowserController(QObject):
                     self._update_project_list()
         except (ValueError, KeyError) as e:
             QMessageBox.warning(self._view, "Error", str(e))
+
+    def _on_duplicate_project(self):
+        """Handles duplicating a selected project."""
+        selected_items = self._view.project_tree_widget.selectedItems()
+        if not selected_items:
+            return
+
+        original_name = selected_items[0].text(0)
+        
+        new_name, ok = QInputDialog.getText(
+            self._view,
+            "Duplicate Project",
+            f"Enter a new name for the duplicated project:",
+            text=f"{original_name} (copy)"
+        )
+
+        if ok and new_name:
+            try:
+                self._config_manager.duplicate_project(original_name, new_name.strip())
+                self._update_project_list()
+            except ValueError as e:
+                QMessageBox.warning(self._view, "Error", str(e))
 
     def _on_remove_project(self):
         """Handles removing one or more selected projects."""

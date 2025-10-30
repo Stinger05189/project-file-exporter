@@ -5,6 +5,7 @@ import os
 import json
 from typing import Dict, List
 import sys
+import copy
 
 from src.core.project_config import ProjectConfig
 
@@ -92,6 +93,33 @@ class ConfigManager:
         # Update the internal dictionary
         del self.projects[old_name]
         self.projects[new_name] = project
+
+    def duplicate_project(self, original_name: str, new_name: str) -> ProjectConfig:
+        """Creates a copy of an existing project with a new name."""
+        if new_name in self.projects:
+            raise ValueError(f"A project with the name '{new_name}' already exists.")
+
+        if original_name not in self.projects:
+            raise ValueError(f"No project found with the name '{original_name}'.")
+
+        original_project = self.get_project(original_name)
+        
+        # Create a new project instance, then copy the relevant data
+        new_project = ProjectConfig(name=new_name, root_path=original_project.root_path)
+        
+        # Copy filters, overrides, and UI state
+        new_project.inclusive_filters = copy.deepcopy(original_project.inclusive_filters)
+        new_project.exclusive_filters = copy.deepcopy(original_project.exclusive_filters)
+        new_project.blacklisted_paths = copy.deepcopy(original_project.blacklisted_paths)
+        new_project.extension_overrides = copy.deepcopy(original_project.extension_overrides)
+        new_project.ui_state = copy.deepcopy(original_project.ui_state)
+
+        # New metadata fields like last_opened, date_created, export_count
+        # are already initialized to defaults in ProjectConfig.__init__.
+
+        self.save_project(new_project)
+        self.projects[new_name] = new_project
+        return new_project
 
     def get_project(self, project_name: str) -> ProjectConfig:
         """Retrieves a specific ProjectConfig object by name."""
