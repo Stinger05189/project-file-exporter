@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter, QLabel,
     QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator, QAbstractItemView,
-    QSizePolicy, QMenu, QToolButton
+    QSizePolicy, QMenu, QToolButton, QTabWidget, QStackedWidget, QCheckBox
 )
 from PyQt6.QtCore import Qt, QRectF, QByteArray
 from src.utils import resource_path
@@ -35,6 +35,7 @@ class NameDelegate(QStyledItemDelegate):
             painter.restore()
         else:
             super().paint(painter, option, index)
+    pass
 
 class PathDelegate(QStyledItemDelegate):
     """A delegate to render HTML in a specific column of the QTreeWidget."""
@@ -61,6 +62,7 @@ class PathDelegate(QStyledItemDelegate):
         else:
             # For all other columns, use the default painter
             super().paint(painter, option, index)
+    pass
 
 class ProjectViewWindow(QMainWindow):
     """Defines the UI for the main project workspace."""
@@ -122,13 +124,8 @@ class ProjectViewWindow(QMainWindow):
         # This targeted stylesheet ensures the dropdown arrow is properly aligned
         # and does not overlap with the text, regardless of the active theme.
         theme_button.setStyleSheet("""
-            QToolButton#themeButton {
-                padding-right: 10px;
-            }
-            QToolButton#themeButton::menu-indicator {
-                subcontrol-position: middle right;
-                right: 5px;
-            }
+            QToolButton#themeButton { padding-right: 10px; }
+            QToolButton#themeButton::menu-indicator { subcontrol-position: middle right; right: 5px; }
         """)
 
         toolbar.addWidget(theme_button)
@@ -150,25 +147,44 @@ class ProjectViewWindow(QMainWindow):
         self.apply_filters_button.setObjectName("applyButton")
         config_layout.addWidget(self.apply_filters_button)
         
-        form_layout = QFormLayout()
+        # Create stacked widget for config panels
+        self.config_stack = QStackedWidget()
 
+        # Page 1: File Export Configuration
+        file_export_config_widget = QWidget()
+        file_export_form_layout = QFormLayout(file_export_config_widget)
         self.blacklisted_paths_textbox = QTextEdit()
         self.inclusive_filters_textbox = QTextEdit()
         self.exclusive_filters_textbox = QTextEdit()
         self.extension_overrides_textbox = QTextEdit()
-
-        # Allow text boxes to expand vertically to use available space
+        
         for textbox in [self.blacklisted_paths_textbox, self.inclusive_filters_textbox, self.exclusive_filters_textbox, self.extension_overrides_textbox]:
             textbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
-        form_layout.addRow(QLabel("Blacklisted Directory Names (one per line):"), self.blacklisted_paths_textbox)
-        form_layout.addRow(QLabel("Inclusive Filters (one per line):"), self.inclusive_filters_textbox)
-        form_layout.addRow(QLabel("Exclusive Filters (one per line):"), self.exclusive_filters_textbox)
-        form_layout.addRow(QLabel("Extension Overrides (e.g., svg:xml):"), self.extension_overrides_textbox)
+        file_export_form_layout.addRow(QLabel("Blacklisted Directory Names:"), self.blacklisted_paths_textbox)
+        file_export_form_layout.addRow(QLabel("Inclusive Filters:"), self.inclusive_filters_textbox)
+        file_export_form_layout.addRow(QLabel("Exclusive Filters:"), self.exclusive_filters_textbox)
+        file_export_form_layout.addRow(QLabel("Extension Overrides:"), self.extension_overrides_textbox)
         
-        config_layout.addLayout(form_layout)
+        # Page 2: Tree Markdown Export Configuration
+        tree_export_config_widget = QWidget()
+        tree_export_form_layout = QFormLayout(tree_export_config_widget)
+        self.tree_exclusive_filters_textbox = QTextEdit()
+        self.tree_exclusive_filters_textbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.use_gitignore_checkbox = QCheckBox("Apply .gitignore Rules")
+        
+        tree_export_form_layout.addRow(self.use_gitignore_checkbox)
+        tree_export_form_layout.addRow(QLabel("Tree Exclusive Filters (one per line):"), self.tree_exclusive_filters_textbox)
 
-        # --- Right Pane: File Tree Visualization ---
+        # Add pages to stack and then stack to layout
+        self.config_stack.addWidget(file_export_config_widget)
+        self.config_stack.addWidget(tree_export_config_widget)
+        config_layout.addWidget(self.config_stack)
+
+        # --- Right Pane: Tabbed Tree Views ---
+        self.main_tab_widget = QTabWidget()
+
+        # Tab 1: File Tree
         self.file_tree_widget = QTreeWidget()
         self.file_tree_widget.setHeaderLabels(["Name", "Size", "Override", "Status", "Path"])
         self.file_tree_widget.setColumnWidth(0, 300)
@@ -183,13 +199,23 @@ class ProjectViewWindow(QMainWindow):
         # Apply the custom delegates
         self.file_tree_widget.setItemDelegateForColumn(0, NameDelegate(self.file_tree_widget))
         self.file_tree_widget.setItemDelegateForColumn(4, PathDelegate(self.file_tree_widget))
+        
+        # Tab 2: Markdown Tree
+        self.markdown_tree_widget = QTreeWidget()
+        self.markdown_tree_widget.setHeaderHidden(True)
+        self.markdown_tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.markdown_tree_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+
+        # Add widgets to tabs
+        self.main_tab_widget.addTab(self.file_tree_widget, "File Export")
+        self.main_tab_widget.addTab(self.markdown_tree_widget, "Tree Markdown Export")
 
         # Add panes to splitter
         self.splitter.addWidget(config_panel)
-        self.splitter.addWidget(self.file_tree_widget)
+        self.splitter.addWidget(self.main_tab_widget)
         self.splitter.setSizes([350, 550])
 
-        # Colors for styling - Reduced to only syntax highlighting colors
+        # Colors for styling
         self.path_slash_color = "#808080"
         self.path_ext_color = "#FFC66D"
 
@@ -215,6 +241,24 @@ class ProjectViewWindow(QMainWindow):
         """Sets the text in the filter boxes."""
         self.inclusive_filters_textbox.setPlainText("\n".join(inclusive))
         self.exclusive_filters_textbox.setPlainText("\n".join(exclusive))
+
+    # --- New Getters/Setters for Tree Export ---
+    def get_tree_filters(self) -> List[str]:
+        """Returns the current text from the tree exclusive filter textbox."""
+        exclusive = self.tree_exclusive_filters_textbox.toPlainText().splitlines()
+        return [line.strip() for line in exclusive if line.strip()]
+
+    def set_tree_filters_text(self, exclusive: list[str]):
+        """Sets the text in the tree exclusive filter box."""
+        self.tree_exclusive_filters_textbox.setPlainText("\n".join(exclusive))
+
+    def get_use_gitignore_state(self) -> bool:
+        """Returns the checked state of the .gitignore checkbox."""
+        return self.use_gitignore_checkbox.isChecked()
+
+    def set_use_gitignore_state(self, state: bool):
+        """Sets the checked state of the .gitignore checkbox."""
+        self.use_gitignore_checkbox.setChecked(state)
 
     def get_blacklisted_paths(self) -> List[str]:
         """Returns the current text from the blacklist textbox as a list of strings."""
@@ -343,9 +387,45 @@ class ProjectViewWindow(QMainWindow):
         
         for child_node in node.get("children", []):
             self._add_tree_item(tree_item, child_node, overrides, root_path, show_full_path, hide_excluded)
+        pass
 
+    # --- Markdown Tree ---
+    def populate_markdown_tree(self, filtered_tree: Dict[str, Any], hide_excluded: bool):
+        """Clears and rebuilds the markdown tree widget."""
+        self.markdown_tree_widget.clear()
+        if not filtered_tree:
+            return
+        self._add_markdown_tree_item(None, filtered_tree, hide_excluded)
+        self.markdown_tree_widget.expandToDepth(0)
+
+    def _add_markdown_tree_item(self, parent_item: QTreeWidgetItem | None, node: Dict[str, Any], hide_excluded: bool):
+        """Recursively adds an item to the markdown tree widget."""
+        if hide_excluded and node.get("status") == "excluded":
+            return
+
+        if parent_item is None:
+            tree_item = QTreeWidgetItem(self.markdown_tree_widget)
+        else:
+            tree_item = QTreeWidgetItem(parent_item)
+
+        tree_item.setText(0, node["name"])
+        # Store data needed for context menu
+        tree_item.setData(0, Qt.ItemDataRole.UserRole + 1, node["type"])
+        tree_item.setData(4, Qt.ItemDataRole.UserRole, node["path"])
+
+        if node.get("status") == "excluded":
+            tree_item.setDisabled(True)
+
+        # Sort children for consistent display
+        sorted_children = sorted(
+            node.get("children", []),
+            key=lambda x: (x["type"] != "directory", x["name"].lower())
+        )
+        for child_node in sorted_children:
+            self._add_markdown_tree_item(tree_item, child_node, hide_excluded)
+    
     def get_expanded_item_paths(self) -> set[str]:
-        """Returns a set of raw paths for all currently expanded items in the tree."""
+        """Returns a set of raw paths for all currently expanded items in the file tree."""
         expanded_paths = set()
         iterator = QTreeWidgetItemIterator(self.file_tree_widget)
         while iterator.value():
@@ -358,7 +438,7 @@ class ProjectViewWindow(QMainWindow):
         return expanded_paths
 
     def apply_expanded_state(self, expanded_paths: set[str]):
-        """Expands all tree items whose raw paths are in the provided set."""
+        """Expands all file tree items whose raw paths are in the provided set."""
         iterator = QTreeWidgetItemIterator(self.file_tree_widget)
         while iterator.value():
             item = iterator.value()
@@ -367,6 +447,29 @@ class ProjectViewWindow(QMainWindow):
                 item.setExpanded(True)
             iterator += 1
 
+    def get_markdown_expanded_item_paths(self) -> set[str]:
+        """Returns a set of raw paths for all currently expanded items in the markdown tree."""
+        expanded_paths = set()
+        iterator = QTreeWidgetItemIterator(self.markdown_tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if item.isExpanded():
+                path = item.data(4, Qt.ItemDataRole.UserRole)
+                if path:
+                    expanded_paths.add(path)
+            iterator += 1
+        return expanded_paths
+
+    def apply_markdown_expanded_state(self, expanded_paths: set[str]):
+        """Expands all markdown tree items whose raw paths are in the provided set."""
+        iterator = QTreeWidgetItemIterator(self.markdown_tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            raw_path = item.data(4, Qt.ItemDataRole.UserRole)
+            if raw_path in expanded_paths:
+                item.setExpanded(True)
+            iterator += 1
+    
     def update_status_bar(self, included_count: int, excluded_count: int, total_size_bytes: int):
         """Updates the labels in the status bar with the latest file stats."""
         green_value_color = "#98fb98"
@@ -376,7 +479,8 @@ class ProjectViewWindow(QMainWindow):
         size_str = self._format_size(total_size_bytes)
         
         self.size_label.setText(f"Total Size: <font color='{green_value_color}'>{size_str}</font>")
-
+        pass
+    
     def get_ui_state(self) -> Dict[str, Any]:
         """Gathers the current UI state into a dictionary for serialization."""
         return {
@@ -400,3 +504,4 @@ class ProjectViewWindow(QMainWindow):
             header_state = state.get("tree_header_state")
             if header_state:
                 self.file_tree_widget.header().restoreState(QByteArray.fromHex(header_state.encode('ascii')))
+        pass

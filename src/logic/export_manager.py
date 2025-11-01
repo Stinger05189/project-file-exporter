@@ -77,3 +77,49 @@ class ExportManager:
                 print(f"Error copying file {source_path}: {e}")
         
         return temp_dir
+
+    @staticmethod
+    def export_markdown_tree(
+        filtered_markdown_tree: Dict[str, Any],
+        export_path: str
+    ):
+        """
+        Generates a Markdown file representing the filtered tree structure
+        using box-drawing characters.
+
+        Args:
+            filtered_markdown_tree (Dict[str, Any]): The filtered tree for Markdown export.
+            export_path (str): The directory where the .md file will be saved.
+        """
+        
+        def _build_string(node: Dict[str, Any], prefix: str) -> str:
+            """Recursively builds the string for the Markdown file."""
+            result_string = ""
+            
+            # Filter out excluded children before processing
+            children = [child for child in node.get("children", []) if child.get("status") != "excluded"]
+            
+            # Sort for consistent output: directories first, then alphabetically
+            children.sort(key=lambda x: (x["type"] != "directory", x["name"].lower()))
+            
+            for i, child in enumerate(children):
+                is_last = (i == len(children) - 1)
+                connector = "└─ " if is_last else "├─ "
+                result_string += f"{prefix}{connector}{child['name']}\n"
+                
+                new_prefix = prefix + ("    " if is_last else "│   ")
+                result_string += _build_string(child, new_prefix)
+            
+            return result_string
+
+        # Start with the root path as the title
+        root_path_str = filtered_markdown_tree.get("path", "Exported Tree")
+        final_content = f"{root_path_str}/\n"
+        final_content += _build_string(filtered_markdown_tree, "")
+        
+        output_file_path = os.path.join(export_path, "ExportedFileTree.md")
+        try:
+            with open(output_file_path, 'w', encoding='utf-8') as f:
+                f.write(final_content)
+        except IOError as e:
+            print(f"Error writing Markdown tree file: {e}")

@@ -30,6 +30,8 @@ class ProjectConfig:
         self.root_path: str = root_path
         self.inclusive_filters: List[str] = []
         self.exclusive_filters: List[str] = []
+        self.tree_exclusive_filters: List[str] = []
+        self.tree_use_gitignore: bool = True
         self.blacklisted_paths: List[str] = DEFAULT_BLACKLIST[:]
         self.config_file_path: str = ""
         self.extension_overrides: Dict[str, str] = {}
@@ -47,6 +49,8 @@ class ProjectConfig:
             "root_path": self.root_path,
             "inclusive_filters": self.inclusive_filters,
             "exclusive_filters": self.exclusive_filters,
+            "tree_exclusive_filters": self.tree_exclusive_filters,
+            "tree_use_gitignore": self.tree_use_gitignore,
             "blacklisted_paths": self.blacklisted_paths,
             "extension_overrides": self.extension_overrides,
             "ui_state": self.ui_state,
@@ -63,6 +67,8 @@ class ProjectConfig:
         project = cls(data["project_name"], data["root_path"])
         project.inclusive_filters = data.get("inclusive_filters", [])
         project.exclusive_filters = data.get("exclusive_filters", [])
+        project.tree_exclusive_filters = data.get("tree_exclusive_filters", [])
+        project.tree_use_gitignore = data.get("tree_use_gitignore", True)
         project.blacklisted_paths = data.get("blacklisted_paths", DEFAULT_BLACKLIST[:])
         project.extension_overrides = data.get("extension_overrides", {})
         project.ui_state = data.get("ui_state", {})
