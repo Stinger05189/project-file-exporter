@@ -4,12 +4,12 @@
 from typing import Dict, Any, Tuple, List
 import os
 
-from PyQt6.QtGui import QAction, QColor, QBrush, QPainter, QTextDocument, QIcon
+from PyQt6.QtGui import QAction, QColor, QBrush, QPainter, QTextDocument, QIcon, QActionGroup
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter, QLabel,
     QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator, QAbstractItemView,
-    QSizePolicy
+    QSizePolicy, QMenu, QToolButton
 )
 from PyQt6.QtCore import Qt, QRectF, QByteArray
 from src.utils import resource_path
@@ -97,7 +97,41 @@ class ProjectViewWindow(QMainWindow):
         toolbar.addAction(self.hide_excluded_action)
         toolbar.addSeparator()
         toolbar.addAction(self.help_action)
+        toolbar.addSeparator()
 
+        theme_menu = QMenu("Theme", self)
+        self.dark_theme_action = QAction("Dark", self)
+        self.light_theme_action = QAction("Light", self)
+        self.auto_theme_action = QAction("Auto (System)", self)
+        
+        self.theme_action_group = QActionGroup(self)
+        self.theme_action_group.setExclusive(True)
+        
+        actions = [self.dark_theme_action, self.light_theme_action, self.auto_theme_action]
+        for action in actions:
+            action.setCheckable(True)
+            self.theme_action_group.addAction(action)
+            theme_menu.addAction(action)
+
+        theme_button = QToolButton()
+        theme_button.setObjectName("themeButton") # ID for specific styling
+        theme_button.setText("Theme")
+        theme_button.setMenu(theme_menu)
+        theme_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        
+        # This targeted stylesheet ensures the dropdown arrow is properly aligned
+        # and does not overlap with the text, regardless of the active theme.
+        theme_button.setStyleSheet("""
+            QToolButton#themeButton {
+                padding-right: 10px;
+            }
+            QToolButton#themeButton::menu-indicator {
+                subcontrol-position: middle right;
+                right: 5px;
+            }
+        """)
+
+        toolbar.addWidget(theme_button)
 
         # --- Central Widget & Layout ---
         central_widget = QWidget()
@@ -155,10 +189,7 @@ class ProjectViewWindow(QMainWindow):
         self.splitter.addWidget(self.file_tree_widget)
         self.splitter.setSizes([350, 550])
 
-        # Colors for styling
-        self.excluded_brush = QBrush(QColor("#888888"))
-        self.override_brush = QBrush(QColor("#00FFFF"))
-        self.folder_brush = QBrush(QColor("#87ceeb")) # Light blue
+        # Colors for styling - Reduced to only syntax highlighting colors
         self.path_slash_color = "#808080"
         self.path_ext_color = "#FFC66D"
 
@@ -266,7 +297,6 @@ class ProjectViewWindow(QMainWindow):
             if path_to_display == ".":
                 path_to_display = node["name"] # Show root folder name instead of '.'
 
-        base_color = "#f0f0f0" # Use consistent white for base text
         html_path = ""
 
         # Generate HTML for styled path (Column 4)
@@ -276,33 +306,32 @@ class ProjectViewWindow(QMainWindow):
             
             colored_dir = path_dir.replace(os.sep, f"<font color='{self.path_slash_color}'>{os.sep}</font>")
             
-            html_path += f"<font color='{base_color}'>{colored_dir}"
+            html_path += f"{colored_dir}"
             if path_dir:
                 html_path += f"<font color='{self.path_slash_color}'>{os.sep}</font>"
-            html_path += f"{name}</font>"
+            html_path += f"{name}"
             
             if ext:
                 html_path += f"<font color='{self.path_ext_color}'>{ext}</font>"
         else: # It's a directory
             colored_path = path_to_display.replace(os.sep, f"<font color='{self.path_slash_color}'>{os.sep}</font>")
-            html_path = f"<font color='{base_color}'>{colored_path}</font>"
+            html_path = f"{colored_path}"
         
         tree_item.setText(4, html_path)
 
         # Generate HTML for styled name (Column 0)
         if node["type"] == "file":
             name, ext = os.path.splitext(node["name"])
-            html_name = f"<font color='{base_color}'>{name}</font><font color='{self.path_ext_color}'>{ext}</font>"
+            # Base name color is inherited from the theme; only the extension is colored.
+            html_name = f"{name}<font color='{self.path_ext_color}'>{ext}</font>"
             tree_item.setText(0, html_name)
         else: # It's a directory
-            folder_color = self.folder_brush.color().name()
-            html_name = f"<font color='{folder_color}'>{node['name']}</font>"
-            tree_item.setText(0, html_name)
-
+            # Let the theme handle the folder color; the delegate will render this plain text.
+            tree_item.setText(0, node['name'])
 
         if node.get("status") == "excluded":
-            for i in range(tree_item.columnCount()):
-                tree_item.setForeground(i, self.excluded_brush)
+            # Let the theme handle styling for disabled items.
+            tree_item.setDisabled(True)
         
         # Handle Extension Overrides in the "Override" column
         if node["type"] == "file":
@@ -311,7 +340,6 @@ class ProjectViewWindow(QMainWindow):
             if clean_ext in overrides:
                 target_ext = overrides[clean_ext]
                 tree_item.setText(2, f"{original_ext} -> .{target_ext}")
-                tree_item.setForeground(2, self.override_brush)
         
         for child_node in node.get("children", []):
             self._add_tree_item(tree_item, child_node, overrides, root_path, show_full_path, hide_excluded)

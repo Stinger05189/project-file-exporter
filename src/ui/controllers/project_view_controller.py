@@ -5,6 +5,7 @@ from PyQt6.QtCore import pyqtSignal, QObject, QTimer
 from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QMenu, QTreeWidgetItemIterator, QTreeWidgetItem
 )
+from PyQt6.QtGui import QAction
 import os
 import sys
 import subprocess
@@ -21,6 +22,7 @@ from src.ui.views.help_dialog import HelpDialog
 from src.logic.file_scanner import FileScanner
 from src.logic.filter_engine import FilterEngine
 from src.logic.export_manager import ExportManager
+from src.ui.styling import apply_theme, save_theme_setting, load_theme_setting
 
 # Signal bridge to safely communicate from watchdog's thread to the GUI thread.
 class WatchdogEmitter(QObject):
@@ -83,6 +85,15 @@ class ProjectViewController(QObject):
         self._view.toggle_path_action.setChecked(self._show_full_path)
         self._view.hide_excluded_action.setChecked(self._hide_excluded)
 
+        # Set the correct theme radio button based on the saved setting
+        current_theme = load_theme_setting()
+        if current_theme == "dark":
+            self._view.dark_theme_action.setChecked(True)
+        elif current_theme == "light":
+            self._view.light_theme_action.setChecked(True)
+        else:
+            self._view.auto_theme_action.setChecked(True)
+
         # Pass a flag to indicate this is the first load
         self._on_apply_filters(is_initial_load=True)
         self._view.show()
@@ -103,6 +114,20 @@ class ProjectViewController(QObject):
         self._view.hide_excluded_action.triggered.connect(self._on_toggle_hide_excluded)
         self._view.file_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self._view.closeEvent = self._on_close_event
+        self._view.theme_action_group.triggered.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self, action: QAction):
+        """Applies and saves the selected theme."""
+        theme_text = action.text()
+        theme_map = {
+            "Dark": "dark",
+            "Light": "light",
+            "Auto (System)": "auto"
+        }
+        theme = theme_map.get(theme_text, "auto")
+        
+        apply_theme(theme)
+        save_theme_setting(theme)
 
     def _request_refresh(self):
         """Safely starts the refresh timer from the main GUI thread."""
