@@ -1,15 +1,15 @@
 # src/ui/controllers/project_view_controller.py
-# Copyright (c) 2025 Google. All rights reserved.
 
 from PyQt6.QtCore import pyqtSignal, QObject, QTimer
 from PyQt6.QtWidgets import (
-    QFileDialog, QMessageBox, QMenu, QTreeWidgetItemIterator, QTreeWidgetItem
+    QFileDialog, QMessageBox, QMenu, QTreeWidgetItemIterator, QTreeWidgetItem, QApplication
 )
 from PyQt6.QtGui import QAction
 import os
 import sys
 import subprocess
 import tempfile
+import json
 from datetime import datetime
 import copy
 from PyQt6.QtCore import Qt
@@ -106,12 +106,14 @@ class ProjectViewController(QObject):
         self._view.apply_ui_state(self._project_config.ui_state)
 
         self._start_file_watcher()
-    
+
     def _connect_signals(self):
         """Connects signals from the view to controller methods."""
         self._view.apply_filters_button.clicked.connect(self._on_apply_filters)
         self._view.back_action.triggered.connect(self._on_back)
         self._view.export_button.clicked.connect(self._on_export)
+        self._view.clipboard_export_button.clicked.connect(self._on_clipboard_export)
+        self._view.copy_prompt_button.clicked.connect(self._on_copy_prompt)
         self._view.open_root_action.triggered.connect(self._on_open_root_path)
         self._view.open_export_action.triggered.connect(self._on_open_export_path)
         self._view.help_action.triggered.connect(self._show_help_dialog)
@@ -125,6 +127,37 @@ class ProjectViewController(QObject):
         
         self._view.closeEvent = self._on_close_event
         self._view.theme_action_group.triggered.connect(self._on_theme_changed)
+
+    def _on_copy_prompt(self):
+        """Copies the instruction prompt for the AI to the clipboard."""
+        prompt_text = """I am using a "Sparse Context" tool to load only the specific files relevant to our current task. 
+Please analyze the request and generate a JSON manifest object with the following schema:
+
+```json
+{
+    "comment": "Brief description of the context load",
+    "include": [
+        "src/core",                 // Includes entire directory
+        "src/main.py",              // Includes specific file
+        "src/utils/**/*.json"       // Glob patterns are supported
+    ],
+    "exclude": [
+        "src/core/legacy.py"        // Excludes specific files from the included set
+    ],
+    "filter_extensions": [".py", ".md"] // Optional: If provided, limits directory includes to these extensions
+}
+```
+
+**Rules:**
+1. Only include files strictly necessary for the current task to save context window space.
+2. The `include` array is additive.
+3. The `exclude` array subtracts from the included set.
+4. Output ONLY the JSON object."""
+        
+        QApplication.clipboard().setText(prompt_text)
+        
+        # Show a non-intrusive confirmation
+        self._view.statusBar().showMessage("AI Prompt copied to clipboard!", 3000)
 
     def _on_theme_changed(self, action: QAction):
         """Applies and saves the selected theme."""
@@ -251,6 +284,119 @@ class ProjectViewController(QObject):
             self._project_config.export_count += 1
             self._config_manager.save_project(self._project_config)
             
+            if sys.platform == "win32":
+                os.startfile(temp_dir)
+            elif sys.platform == "darwin": # macOS
+                subprocess.run(["open", temp_dir], check=True)
+            else: # Linux
+                subprocess.run(["xdg-open", temp_dir], check=True)
+
+        except Exception as e:
+            QMessageBox.critical(self._view, "Export Error", f"An unexpected error occurred during export:\n{e}")
+        pass
+
+    def _on_clipboard_export(self):
+        """Exports files based on a JSON manifest in the clipboard."""
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        
+        try:
+            manifest = json.loads(text)
+        except json.JSONDecodeError:
+            QMessageBox.warning(self._view, "Invalid Manifest", "Clipboard does not contain valid JSON.")
+            return
+
+        if "include" not in manifest or not isinstance(manifest["include"], list):
+             QMessageBox.warning(self._view, "Invalid Manifest", "JSON must contain an 'include' array.")
+             return
+
+        # 1. Translate Manifest to Filters
+        man_inc = manifest.get("include", [])
+        man_exc = manifest.get("exclude", [])
+        extensions = manifest.get("filter_extensions", [])
+
+        # Combine Project Exclusions with Manifest Exclusions
+        # This ensures global project rules (like excluding *__init__.py) apply 
+        # unless the file is clearly not matched by the exclusion pattern.
+        final_exclusive = self._project_config.exclusive_filters + man_exc
+
+        final_inclusive = []
+        
+        if extensions:
+            # If extensions are strictly defined, we modify the includes to only match those extensions
+            for path in man_inc:
+                # Normalize path to remove trailing slashes or mixed separators
+                clean_path = os.path.normpath(path).replace(os.sep, '/')
+                
+                # If path looks like a specific file (has extension), keep it as-is. 
+                if os.path.splitext(clean_path)[1]: 
+                    final_inclusive.append(clean_path)
+                else:
+                    for ext in extensions:
+                        # Construct robust glob pattern
+                        final_inclusive.append(f"{clean_path}/**/*{ext}")
+        else:
+            final_inclusive = man_inc
+
+        # 2. Get Raw Tree
+        try:
+            raw_tree, _ = FileScanner.scan_directory(
+                self._project_config.root_path,
+                self._project_config.blacklisted_paths
+            )
+        except ValueError as e:
+            QMessageBox.critical(self._view, "Error Scanning", str(e))
+            return
+
+        # 3. Pass 1: Content Tree (What we copy)
+        # Use manifest INCLUSIONS, but combined EXCLUSIONS
+        content_tree = FilterEngine.apply_filters(
+            copy.deepcopy(raw_tree),
+            self._project_config.root_path,
+            final_inclusive,
+            final_exclusive 
+        )
+        
+        # Collect absolute paths of files explicitly included for the copy
+        loaded_paths = set()
+        def collect_paths(node):
+            if node.get("status") == "included" and node["type"] == "file":
+                loaded_paths.add(node["path"])
+            for child in node.get("children", []):
+                collect_paths(child)
+        collect_paths(content_tree)
+
+        if not loaded_paths:
+            QMessageBox.warning(self._view, "Empty Export", "The manifest matched 0 files.")
+            return
+
+        # 4. Pass 2: Atlas Tree (The map we generate)
+        # We use the Project's Tree Exclusion filters (to hide .git, etc)
+        # But NO inclusive filters (we want to show the whole structure)
+        atlas_tree = FilterEngine.apply_filters(
+            copy.deepcopy(raw_tree),
+            self._project_config.root_path,
+            [], 
+            self._project_config.tree_exclusive_filters
+        )
+
+        # 5. Export
+        try:
+            # Copy Files
+            temp_dir = ExportManager.export_files(
+                content_tree,
+                self._project_config.root_path,
+                self._project_config.extension_overrides
+            )
+            
+            # Generate Sparse Atlas
+            ExportManager.export_markdown_tree(atlas_tree, temp_dir, loaded_paths)
+            
+            # Update stats
+            self._project_config.export_count += 1
+            self._config_manager.save_project(self._project_config)
+            
+            # Notify/Open
             if sys.platform == "win32":
                 os.startfile(temp_dir)
             elif sys.platform == "darwin": # macOS

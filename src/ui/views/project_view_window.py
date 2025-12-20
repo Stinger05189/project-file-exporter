@@ -79,12 +79,20 @@ class ProjectViewWindow(QMainWindow):
         self.export_button = QPushButton("Export Files...")
         self.export_button.setObjectName("exportButton")
         
+        self.clipboard_export_button = QPushButton("📄 Export from Manifest")
+        self.clipboard_export_button.setToolTip("Export files based on a JSON manifest in your clipboard")
+        self.clipboard_export_button.setObjectName("clipboardExportButton")
+
+        self.copy_prompt_button = QPushButton("📋 Copy AI Prompt")
+        self.copy_prompt_button.setToolTip("Copy the system prompt to instruct AI on how to generate manifests")
+        self.copy_prompt_button.setObjectName("copyPromptButton")
+
         self.open_root_action = QAction("Open Root Folder", self)
         self.open_export_action = QAction("Open Export Folder", self)
         
         self.toggle_path_action = QAction("Show Full Paths", self)
         self.toggle_path_action.setCheckable(True)
-        
+
         self.hide_excluded_action = QAction("Hide Excluded Items", self)
         self.hide_excluded_action.setCheckable(True)
 
@@ -92,6 +100,8 @@ class ProjectViewWindow(QMainWindow):
         toolbar.addAction(self.back_action)
         toolbar.addSeparator()
         toolbar.addWidget(self.export_button)
+        toolbar.addWidget(self.clipboard_export_button)
+        toolbar.addWidget(self.copy_prompt_button)
         toolbar.addAction(self.open_root_action)
         toolbar.addAction(self.open_export_action)
         toolbar.addSeparator()

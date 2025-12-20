@@ -1,9 +1,7 @@
 # src/logic/export_manager.py
-# Copyright (c) 2025 Google. All rights reserved.
-
 import os
 import shutil
-from typing import Dict, Any, Generator, List
+from typing import Dict, Any, Generator, List, Set
 import tempfile
 
 class ExportManager:
@@ -81,7 +79,8 @@ class ExportManager:
     @staticmethod
     def export_markdown_tree(
         filtered_markdown_tree: Dict[str, Any],
-        export_path: str
+        export_path: str,
+        loaded_paths: Set[str] = None
     ):
         """
         Generates a Markdown file representing the filtered tree structure
@@ -90,6 +89,8 @@ class ExportManager:
         Args:
             filtered_markdown_tree (Dict[str, Any]): The filtered tree for Markdown export.
             export_path (str): The directory where the .md file will be saved.
+            loaded_paths (Set[str], optional): Set of absolute file paths that were physically exported.
+                                               Files not in this set will be tagged as [NOT LOADED].
         """
         
         def _build_string(node: Dict[str, Any], prefix: str) -> str:
@@ -105,7 +106,14 @@ class ExportManager:
             for i, child in enumerate(children):
                 is_last = (i == len(children) - 1)
                 connector = "└─ " if is_last else "├─ "
-                result_string += f"{prefix}{connector}{child['name']}\n"
+                
+                display_name = child['name']
+                # Tag files not present in the export context
+                if child["type"] == "file" and loaded_paths is not None:
+                    if child["path"] not in loaded_paths:
+                        display_name += " [NOT LOADED]"
+
+                result_string += f"{prefix}{connector}{display_name}\n"
                 
                 new_prefix = prefix + ("    " if is_last else "│   ")
                 result_string += _build_string(child, new_prefix)
