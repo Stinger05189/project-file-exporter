@@ -2,8 +2,8 @@
 
 
 a = Analysis(
-    ['src\\main.py'],
-    pathex=['.'],
+    ['launcher.py'],
+    pathex=[],
     binaries=[],
     datas=[('assets/icon.ico', 'assets')],
     hiddenimports=[],
