@@ -3,6 +3,7 @@
 
 from typing import Dict, Any, Tuple, List
 import os
+import qtawesome as qta 
 
 from PyQt6.QtGui import QAction, QColor, QBrush, QPainter, QTextDocument, QIcon, QActionGroup
 from PyQt6.QtWidgets import (
@@ -146,21 +147,27 @@ class ProjectViewWindow(QMainWindow):
         # --- PRESET TOOLBAR (NEW) ---
         preset_layout = QHBoxLayout()
         preset_layout.setContentsMargins(0, 0, 0, 0)
+        preset_layout.setSpacing(5) # Add a little spacing between buttons
         
         preset_label = QLabel("Preset:")
         self.preset_combo = QComboBox()
         self.preset_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         
+        # Define a consistent styling for the icons
+        # "fa5s" = FontAwesome 5 Solid. "color='white'" ensures high contrast in dark mode.
+        # You might want a slightly off-white (#eeeeee) for softer contrast.
+        icon_color = "#eeeeee" 
+
         self.save_preset_btn = QToolButton()
-        self.save_preset_btn.setText("💾")
+        self.save_preset_btn.setIcon(qta.icon('fa5s.save', color=icon_color))
         self.save_preset_btn.setToolTip("Save changes to current preset")
         
         self.add_preset_btn = QToolButton()
-        self.add_preset_btn.setText("➕")
+        self.add_preset_btn.setIcon(qta.icon('fa5s.plus', color=icon_color))
         self.add_preset_btn.setToolTip("Add new preset from current settings")
         
         self.del_preset_btn = QToolButton()
-        self.del_preset_btn.setText("🗑️")
+        self.del_preset_btn.setIcon(qta.icon('fa5s.trash-alt', color=icon_color))
         self.del_preset_btn.setToolTip("Delete current preset")
 
         preset_layout.addWidget(preset_label)
