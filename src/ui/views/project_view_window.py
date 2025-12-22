@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter, QLabel,
     QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator, QAbstractItemView,
-    QSizePolicy, QMenu, QToolButton, QTabWidget, QStackedWidget, QCheckBox
+    QSizePolicy, QMenu, QToolButton, QTabWidget, QStackedWidget, QCheckBox,
+    QComboBox
 )
 from PyQt6.QtCore import Qt, QRectF, QByteArray
 from src.utils import resource_path
@@ -35,34 +36,23 @@ class NameDelegate(QStyledItemDelegate):
             painter.restore()
         else:
             super().paint(painter, option, index)
-    pass
 
 class PathDelegate(QStyledItemDelegate):
     """A delegate to render HTML in a specific column of the QTreeWidget."""
     def paint(self, painter: QPainter, option, index):
         if index.column() == 4: # Path column
-            # To render rich text, we must handle the painting ourselves
             painter.save()
-            
             doc = QTextDocument()
             doc.setHtml(index.model().data(index))
-            
-            # Ensure the document fits within the option rectangle
-            option.text = "" # We draw the text ourselves
+            option.text = "" 
             self.parent().style().drawControl(self.parent().style().ControlElement.CE_ItemViewItem, option, painter, self.parent())
-
-            # Adjust for padding and alignment
             text_rect = QRectF(option.rect)
             text_rect.adjust(5, 0, 0, 0) 
-            
             painter.translate(text_rect.topLeft())
             doc.drawContents(painter)
-            
             painter.restore()
         else:
-            # For all other columns, use the default painter
             super().paint(painter, option, index)
-    pass
 
 class ProjectViewWindow(QMainWindow):
     """Defines the UI for the main project workspace."""
@@ -126,13 +116,10 @@ class ProjectViewWindow(QMainWindow):
             theme_menu.addAction(action)
 
         theme_button = QToolButton()
-        theme_button.setObjectName("themeButton") # ID for specific styling
+        theme_button.setObjectName("themeButton") 
         theme_button.setText("Theme")
         theme_button.setMenu(theme_menu)
         theme_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        
-        # This targeted stylesheet ensures the dropdown arrow is properly aligned
-        # and does not overlap with the text, regardless of the active theme.
         theme_button.setStyleSheet("""
             QToolButton#themeButton { padding-right: 10px; }
             QToolButton#themeButton::menu-indicator { subcontrol-position: middle right; right: 5px; }
@@ -155,6 +142,34 @@ class ProjectViewWindow(QMainWindow):
         
         self.apply_filters_button = QPushButton("Apply Filters & Refresh Tree")
         self.apply_filters_button.setObjectName("applyButton")
+        
+        # --- PRESET TOOLBAR (NEW) ---
+        preset_layout = QHBoxLayout()
+        preset_layout.setContentsMargins(0, 0, 0, 0)
+        
+        preset_label = QLabel("Preset:")
+        self.preset_combo = QComboBox()
+        self.preset_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        
+        self.save_preset_btn = QToolButton()
+        self.save_preset_btn.setText("💾")
+        self.save_preset_btn.setToolTip("Save changes to current preset")
+        
+        self.add_preset_btn = QToolButton()
+        self.add_preset_btn.setText("➕")
+        self.add_preset_btn.setToolTip("Add new preset from current settings")
+        
+        self.del_preset_btn = QToolButton()
+        self.del_preset_btn.setText("🗑️")
+        self.del_preset_btn.setToolTip("Delete current preset")
+
+        preset_layout.addWidget(preset_label)
+        preset_layout.addWidget(self.preset_combo)
+        preset_layout.addWidget(self.save_preset_btn)
+        preset_layout.addWidget(self.add_preset_btn)
+        preset_layout.addWidget(self.del_preset_btn)
+
+        config_layout.addLayout(preset_layout)
         config_layout.addWidget(self.apply_filters_button)
         
         # Create stacked widget for config panels
@@ -202,7 +217,6 @@ class ProjectViewWindow(QMainWindow):
         self.file_tree_widget.setColumnWidth(2, 100)
         self.file_tree_widget.setColumnWidth(3, 80)
         self.file_tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        # Allow multiple items to be selected with Shift/Ctrl modifiers
         self.file_tree_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_tree_widget.setStyleSheet("QTreeWidget::item { border-bottom: 1px solid #4a4a4a; }")
         
@@ -242,7 +256,6 @@ class ProjectViewWindow(QMainWindow):
         """Returns the current text from the filter textboxes as lists of strings."""
         inclusive = self.inclusive_filters_textbox.toPlainText().splitlines()
         exclusive = self.exclusive_filters_textbox.toPlainText().splitlines()
-        # Filter out empty lines
         inclusive = [line.strip() for line in inclusive if line.strip()]
         exclusive = [line.strip() for line in exclusive if line.strip()]
         return inclusive, exclusive
@@ -252,7 +265,6 @@ class ProjectViewWindow(QMainWindow):
         self.inclusive_filters_textbox.setPlainText("\n".join(inclusive))
         self.exclusive_filters_textbox.setPlainText("\n".join(exclusive))
 
-    # --- New Getters/Setters for Tree Export ---
     def get_tree_filters(self) -> List[str]:
         """Returns the current text from the tree exclusive filter textbox."""
         exclusive = self.tree_exclusive_filters_textbox.toPlainText().splitlines()
@@ -273,7 +285,6 @@ class ProjectViewWindow(QMainWindow):
     def get_blacklisted_paths(self) -> List[str]:
         """Returns the current text from the blacklist textbox as a list of strings."""
         paths = self.blacklisted_paths_textbox.toPlainText().splitlines()
-        # Filter out empty lines
         return [line.strip() for line in paths if line.strip()]
 
     def set_blacklisted_paths_text(self, paths: list[str]):
@@ -298,6 +309,19 @@ class ProjectViewWindow(QMainWindow):
         lines = [f"{source}:{target}" for source, target in overrides.items()]
         self.extension_overrides_textbox.setPlainText("\n".join(lines))
 
+    # --- New Helper for Batch Updating UI ---
+    def set_all_filter_ui_state(self, 
+                                inclusive: list[str], 
+                                exclusive: list[str], 
+                                tree_exclusive: list[str], 
+                                overrides: dict[str, str], 
+                                use_gitignore: bool):
+        """Updates all filter input fields at once."""
+        self.set_filters_text(inclusive, exclusive)
+        self.set_tree_filters_text(tree_exclusive)
+        self.set_extension_overrides_text(overrides)
+        self.set_use_gitignore_state(use_gitignore)
+
     def _format_size(self, size_bytes: int) -> str:
         """Formats a size in bytes to a human-readable string."""
         if size_bytes < 1024:
@@ -315,15 +339,12 @@ class ProjectViewWindow(QMainWindow):
         if not filtered_tree:
             return
         
-        # Hide the status column if we are hiding excluded items, as it becomes redundant
         self.file_tree_widget.setColumnHidden(3, hide_excluded)
-
         self._add_tree_item(None, filtered_tree, overrides, root_path, show_full_path, hide_excluded)
         self.file_tree_widget.expandToDepth(0)
 
     def _add_tree_item(self, parent_item: QTreeWidgetItem | None, node: Dict[str, Any], overrides: Dict[str, str], root_path: str, show_full_path: bool, hide_excluded: bool):
         """Recursively adds an item to the tree widget."""
-        # If the hide flag is set, don't add excluded items at all
         if hide_excluded and node.get("status") == "excluded":
             return
 
@@ -334,26 +355,21 @@ class ProjectViewWindow(QMainWindow):
             
         tree_item.setText(3, node.get("status", "unknown"))
 
-        # Store extra data for context menu and path toggling
-        tree_item.setData(0, Qt.ItemDataRole.UserRole + 1, node["type"]) # Store node type
-        tree_item.setData(4, Qt.ItemDataRole.UserRole, node["path"]) # Store raw full path
+        tree_item.setData(0, Qt.ItemDataRole.UserRole + 1, node["type"])
+        tree_item.setData(4, Qt.ItemDataRole.UserRole, node["path"])
 
-        # Set Size column
         size_str = self._format_size(node.get("size", 0))
         tree_item.setText(1, size_str)
         tree_item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight)
 
-        # Determine which path to display (full or relative)
         if show_full_path:
             path_to_display = node["path"]
         else:
             path_to_display = os.path.relpath(node["path"], root_path)
             if path_to_display == ".":
-                path_to_display = node["name"] # Show root folder name instead of '.'
+                path_to_display = node["name"]
 
         html_path = ""
-
-        # Generate HTML for styled path (Column 4)
         if node["type"] == "file":
             path_dir, file_name = os.path.split(path_to_display)
             name, ext = os.path.splitext(file_name)
@@ -367,27 +383,22 @@ class ProjectViewWindow(QMainWindow):
             
             if ext:
                 html_path += f"<font color='{self.path_ext_color}'>{ext}</font>"
-        else: # It's a directory
+        else:
             colored_path = path_to_display.replace(os.sep, f"<font color='{self.path_slash_color}'>{os.sep}</font>")
             html_path = f"{colored_path}"
         
         tree_item.setText(4, html_path)
 
-        # Generate HTML for styled name (Column 0)
         if node["type"] == "file":
             name, ext = os.path.splitext(node["name"])
-            # Base name color is inherited from the theme; only the extension is colored.
             html_name = f"{name}<font color='{self.path_ext_color}'>{ext}</font>"
             tree_item.setText(0, html_name)
-        else: # It's a directory
-            # Let the theme handle the folder color; the delegate will render this plain text.
+        else: 
             tree_item.setText(0, node['name'])
 
         if node.get("status") == "excluded":
-            # Let the theme handle styling for disabled items.
             tree_item.setDisabled(True)
         
-        # Handle Extension Overrides in the "Override" column
         if node["type"] == "file":
             _name_root, original_ext = os.path.splitext(node["name"])
             clean_ext = original_ext.lstrip('.').lower()
@@ -397,9 +408,7 @@ class ProjectViewWindow(QMainWindow):
         
         for child_node in node.get("children", []):
             self._add_tree_item(tree_item, child_node, overrides, root_path, show_full_path, hide_excluded)
-        pass
 
-    # --- Markdown Tree ---
     def populate_markdown_tree(self, filtered_tree: Dict[str, Any], hide_excluded: bool):
         """Clears and rebuilds the markdown tree widget."""
         self.markdown_tree_widget.clear()
@@ -419,14 +428,12 @@ class ProjectViewWindow(QMainWindow):
             tree_item = QTreeWidgetItem(parent_item)
 
         tree_item.setText(0, node["name"])
-        # Store data needed for context menu
         tree_item.setData(0, Qt.ItemDataRole.UserRole + 1, node["type"])
         tree_item.setData(4, Qt.ItemDataRole.UserRole, node["path"])
 
         if node.get("status") == "excluded":
             tree_item.setDisabled(True)
 
-        # Sort children for consistent display
         sorted_children = sorted(
             node.get("children", []),
             key=lambda x: (x["type"] != "directory", x["name"].lower())
@@ -489,7 +496,6 @@ class ProjectViewWindow(QMainWindow):
         size_str = self._format_size(total_size_bytes)
         
         self.size_label.setText(f"Total Size: <font color='{green_value_color}'>{size_str}</font>")
-        pass
     
     def get_ui_state(self) -> Dict[str, Any]:
         """Gathers the current UI state into a dictionary for serialization."""
@@ -497,7 +503,7 @@ class ProjectViewWindow(QMainWindow):
             "window_geometry": self.saveGeometry().toHex().data().decode('ascii'),
             "splitter_sizes": self.splitter.sizes(),
             "tree_header_state": self.file_tree_widget.header().saveState().toHex().data().decode('ascii'),
-            "expanded_paths": sorted(list(self.get_expanded_item_paths())) # sort for consistent serialization
+            "expanded_paths": sorted(list(self.get_expanded_item_paths()))
         }
 
     def apply_ui_state(self, state: Dict[str, Any]):
@@ -514,4 +520,3 @@ class ProjectViewWindow(QMainWindow):
             header_state = state.get("tree_header_state")
             if header_state:
                 self.file_tree_widget.header().restoreState(QByteArray.fromHex(header_state.encode('ascii')))
-        pass

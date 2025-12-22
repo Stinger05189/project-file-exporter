@@ -1,10 +1,12 @@
 # src/ui/controllers/project_view_controller.py
+# Copyright (c) 2025 Google. All rights reserved.
 
-from PyQt6.QtCore import pyqtSignal, QObject, QTimer
-from PyQt6.QtWidgets import (
-    QFileDialog, QMessageBox, QMenu, QTreeWidgetItemIterator, QTreeWidgetItem, QApplication
-)
+from PyQt6.QtCore import pyqtSignal, QObject, QTimer, Qt
 from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import (
+    QFileDialog, QMessageBox, QMenu, QTreeWidgetItemIterator, QTreeWidgetItem, 
+    QApplication, QInputDialog
+)
 import os
 import sys
 import subprocess
@@ -12,7 +14,6 @@ import tempfile
 import json
 from datetime import datetime
 import copy
-from PyQt6.QtCore import Qt
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -74,23 +75,25 @@ class ProjectViewController(QObject):
 
     def show(self):
         """Populates the view with initial data and shows the window."""
+        # 1. Load Global Settings
         self._view.set_blacklisted_paths_text(self._project_config.blacklisted_paths)
-        self._view.set_filters_text(
-            self._project_config.inclusive_filters,
-            self._project_config.exclusive_filters
-        )
-        self._view.set_extension_overrides_text(self._project_config.extension_overrides)
-        # Load new tree config
-        self._view.set_tree_filters_text(self._project_config.tree_exclusive_filters)
-        self._view.set_use_gitignore_state(self._project_config.tree_use_gitignore)
         
-        # Load and apply UI toggle states from config
+        # 2. Load Active State (matches the active preset unless modified and not saved)
+        self._view.set_all_filter_ui_state(
+            inclusive=self._project_config.inclusive_filters,
+            exclusive=self._project_config.exclusive_filters,
+            tree_exclusive=self._project_config.tree_exclusive_filters,
+            overrides=self._project_config.extension_overrides,
+            use_gitignore=self._project_config.tree_use_gitignore
+        )
+
+        # 3. Load UI Toggle States
         self._show_full_path = self._project_config.ui_state.get("show_full_path", False)
         self._hide_excluded = self._project_config.ui_state.get("hide_excluded", False)
         self._view.toggle_path_action.setChecked(self._show_full_path)
         self._view.hide_excluded_action.setChecked(self._hide_excluded)
 
-        # Set the correct theme radio button based on the saved setting
+        # 4. Load Theme
         current_theme = load_theme_setting()
         if current_theme == "dark":
             self._view.dark_theme_action.setChecked(True)
@@ -99,9 +102,13 @@ class ProjectViewController(QObject):
         else:
             self._view.auto_theme_action.setChecked(True)
 
-        # Pass a flag to indicate this is the first load
+        # 5. Populate Presets
+        self._populate_presets_combo()
+
+        # 6. Initial Refresh & Show
         self._on_apply_filters(is_initial_load=True)
         self._view.show()
+        
         # Apply window geometry, splitter state etc. after showing the window
         self._view.apply_ui_state(self._project_config.ui_state)
 
@@ -109,24 +116,203 @@ class ProjectViewController(QObject):
 
     def _connect_signals(self):
         """Connects signals from the view to controller methods."""
+        # Config & Export
         self._view.apply_filters_button.clicked.connect(self._on_apply_filters)
-        self._view.back_action.triggered.connect(self._on_back)
         self._view.export_button.clicked.connect(self._on_export)
         self._view.clipboard_export_button.clicked.connect(self._on_clipboard_export)
         self._view.copy_prompt_button.clicked.connect(self._on_copy_prompt)
+        
+        # Preset Management
+        self._view.preset_combo.currentIndexChanged.connect(self._on_preset_selection_changed)
+        self._view.save_preset_btn.clicked.connect(self._on_save_preset_clicked)
+        self._view.add_preset_btn.clicked.connect(self._on_add_preset_clicked)
+        self._view.del_preset_btn.clicked.connect(self._on_delete_preset_clicked)
+
+        # Toolbar Actions
+        self._view.back_action.triggered.connect(self._on_back)
         self._view.open_root_action.triggered.connect(self._on_open_root_path)
         self._view.open_export_action.triggered.connect(self._on_open_export_path)
         self._view.help_action.triggered.connect(self._show_help_dialog)
         self._view.toggle_path_action.triggered.connect(self._on_toggle_path_view)
         self._view.hide_excluded_action.triggered.connect(self._on_toggle_hide_excluded)
+        self._view.theme_action_group.triggered.connect(self._on_theme_changed)
+
+        # Trees & Tabs
         self._view.file_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
-        # New connections
         self._view.markdown_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self._view.main_tab_widget.currentChanged.connect(self._on_tab_changed)
         self._view.use_gitignore_checkbox.stateChanged.connect(self._on_apply_filters)
         
+        # Window
         self._view.closeEvent = self._on_close_event
-        self._view.theme_action_group.triggered.connect(self._on_theme_changed)
+
+    # --- Preset Management Methods ---
+
+    def _populate_presets_combo(self):
+        """Fills the combo box with available presets and selects the active one."""
+        self._view.preset_combo.blockSignals(True) # Prevent triggering selection logic
+        self._view.preset_combo.clear()
+        
+        preset_names = sorted(self._project_config.presets.keys())
+        # Ensure Default is always first
+        if "Default" in preset_names:
+            preset_names.remove("Default")
+            preset_names.insert(0, "Default")
+            
+        self._view.preset_combo.addItems(preset_names)
+        
+        # Select active preset
+        index = self._view.preset_combo.findText(self._project_config.active_preset_name)
+        if index >= 0:
+            self._view.preset_combo.setCurrentIndex(index)
+            
+        self._update_preset_buttons_state()
+        self._view.preset_combo.blockSignals(False)
+
+    def _update_preset_buttons_state(self):
+        """Enables/Disables preset buttons based on selection."""
+        current_preset = self._view.preset_combo.currentText()
+        # Protect the Default preset from deletion
+        if current_preset == "Default":
+            self._view.del_preset_btn.setEnabled(False)
+        else:
+            self._view.del_preset_btn.setEnabled(True)
+
+    def _on_preset_selection_changed(self):
+        """Handles switching presets: Loads data, updates UI, saves config, refreshes tree."""
+        new_preset_name = self._view.preset_combo.currentText()
+        if not new_preset_name: return
+
+        # 1. Update Active Name
+        self._project_config.active_preset_name = new_preset_name
+        
+        # 2. Retrieve Data
+        data = self._project_config.presets.get(new_preset_name, {})
+        
+        # 3. Update UI
+        self._view.set_all_filter_ui_state(
+            inclusive=data.get("inclusive_filters", []),
+            exclusive=data.get("exclusive_filters", []),
+            tree_exclusive=data.get("tree_exclusive_filters", []),
+            overrides=data.get("extension_overrides", {}),
+            use_gitignore=data.get("tree_use_gitignore", True)
+        )
+        
+        self._update_preset_buttons_state()
+        
+        # 4. Update Internal Active State (The working copy)
+        # This overwrites any unsaved "dirty" changes from the previous preset!
+        self._project_config.inclusive_filters = data.get("inclusive_filters", [])
+        self._project_config.exclusive_filters = data.get("exclusive_filters", [])
+        self._project_config.tree_exclusive_filters = data.get("tree_exclusive_filters", [])
+        self._project_config.tree_use_gitignore = data.get("tree_use_gitignore", True)
+        self._project_config.extension_overrides = data.get("extension_overrides", {})
+
+        # 5. Persist the change of selection
+        self._config_manager.save_project(self._project_config)
+        
+        # 6. Auto-Refresh the tree
+        self._on_apply_filters(is_auto_refresh=True)
+
+    def _on_save_preset_clicked(self):
+        """Explicitly saves the current UI input values to the currently selected preset."""
+        current_preset = self._view.preset_combo.currentText()
+        
+        # 1. Scrape UI
+        inc, exc = self._view.get_filters()
+        tree_exc = self._view.get_tree_filters()
+        overrides = self._view.get_extension_overrides()
+        use_git = self._view.get_use_gitignore_state()
+        
+        # 2. Update Preset Dictionary
+        self._project_config.presets[current_preset] = {
+            "inclusive_filters": inc,
+            "exclusive_filters": exc,
+            "tree_exclusive_filters": tree_exc,
+            "tree_use_gitignore": use_git,
+            "extension_overrides": overrides
+        }
+        
+        # 3. Update Active Working Copy
+        self._project_config.inclusive_filters = inc
+        self._project_config.exclusive_filters = exc
+        self._project_config.tree_exclusive_filters = tree_exc
+        self._project_config.tree_use_gitignore = use_git
+        self._project_config.extension_overrides = overrides
+
+        # 4. Save to Disk
+        self._config_manager.save_project(self._project_config)
+        
+        # 5. Refresh Tree
+        self._on_apply_filters(is_auto_refresh=True)
+        
+        self._view.statusBar().showMessage(f"Preset '{current_preset}' saved successfully.", 3000)
+
+    def _on_add_preset_clicked(self):
+        """Creates a new preset based on the current UI settings."""
+        name, ok = QInputDialog.getText(self._view, "New Preset", "Preset Name:")
+        if ok and name:
+            name = name.strip()
+            if not name: return
+            if name in self._project_config.presets:
+                QMessageBox.warning(self._view, "Error", f"Preset '{name}' already exists.")
+                return
+
+            # Scrape UI
+            inc, exc = self._view.get_filters()
+            tree_exc = self._view.get_tree_filters()
+            overrides = self._view.get_extension_overrides()
+            use_git = self._view.get_use_gitignore_state()
+
+            # Create Entry
+            self._project_config.presets[name] = {
+                "inclusive_filters": inc,
+                "exclusive_filters": exc,
+                "tree_exclusive_filters": tree_exc,
+                "tree_use_gitignore": use_git,
+                "extension_overrides": overrides
+            }
+            
+            # Switch to new preset
+            self._project_config.active_preset_name = name
+            
+            # Save
+            self._config_manager.save_project(self._project_config)
+            
+            # Update UI (Re-populates combo and triggers selection logic)
+            self._populate_presets_combo()
+            self._view.statusBar().showMessage(f"Preset '{name}' created.", 3000)
+
+    def _on_delete_preset_clicked(self):
+        """Deletes the selected preset and reverts to Default."""
+        current_preset = self._view.preset_combo.currentText()
+        
+        if current_preset == "Default":
+            QMessageBox.warning(self._view, "Error", "Cannot delete the Default preset.")
+            return
+
+        confirm = QMessageBox.question(
+            self._view, 
+            "Confirm Delete", 
+            f"Are you sure you want to delete preset '{current_preset}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if confirm == QMessageBox.StandardButton.Yes:
+            # Remove
+            del self._project_config.presets[current_preset]
+            
+            # Revert to Default
+            self._project_config.active_preset_name = "Default"
+            
+            # Save
+            self._config_manager.save_project(self._project_config)
+            
+            # Update UI
+            self._populate_presets_combo()
+            self._view.statusBar().showMessage(f"Preset '{current_preset}' deleted.", 3000)
+
+    # --- General Application Logic ---
 
     def _on_copy_prompt(self):
         """Copies the instruction prompt for the AI to the clipboard."""
@@ -155,8 +341,6 @@ Please analyze the request and generate a JSON manifest object with the followin
 4. Output ONLY the JSON object."""
         
         QApplication.clipboard().setText(prompt_text)
-        
-        # Show a non-intrusive confirmation
         self._view.statusBar().showMessage("AI Prompt copied to clipboard!", 3000)
 
     def _on_theme_changed(self, action: QAction):
@@ -168,15 +352,12 @@ Please analyze the request and generate a JSON manifest object with the followin
             "Auto (System)": "auto"
         }
         theme = theme_map.get(theme_text, "auto")
-        
         apply_theme(theme)
         save_theme_setting(theme)
-        pass
 
     def _request_refresh(self):
         """Safely starts the refresh timer from the main GUI thread."""
         self._refresh_timer.start()
-        pass
 
     def _on_tab_changed(self, index: int):
         """Swaps the configuration panel view when the main tab changes."""
@@ -205,12 +386,15 @@ Please analyze the request and generate a JSON manifest object with the followin
             markdown_expanded_paths = set(ui_state.get("markdown_expanded_paths", []))
 
         # Only read from UI and save if the action was triggered by the user
+        # Note: We do NOT save to the preset dictionary here. We only save the 
+        # "Active State" (root level config) for current session persistence.
         if not is_auto_refresh:
-            # Save state from UI for File Export
+            # Global Settings (Consistent across presets)
             self._project_config.blacklisted_paths = self._view.get_blacklisted_paths()
+            
+            # Active Session Settings (May act as dirty state for the current preset)
             self._project_config.inclusive_filters, self._project_config.exclusive_filters = self._view.get_filters()
             self._project_config.extension_overrides = self._view.get_extension_overrides()
-            # Save state from UI for Tree Export
             self._project_config.tree_exclusive_filters = self._view.get_tree_filters()
             self._project_config.tree_use_gitignore = self._view.get_use_gitignore_state()
             
@@ -293,7 +477,6 @@ Please analyze the request and generate a JSON manifest object with the followin
 
         except Exception as e:
             QMessageBox.critical(self._view, "Export Error", f"An unexpected error occurred during export:\n{e}")
-        pass
 
     def _on_clipboard_export(self):
         """Exports files based on a JSON manifest in the clipboard."""
@@ -315,25 +498,16 @@ Please analyze the request and generate a JSON manifest object with the followin
         man_exc = manifest.get("exclude", [])
         extensions = manifest.get("filter_extensions", [])
 
-        # Combine Project Exclusions with Manifest Exclusions
-        # This ensures global project rules (like excluding *__init__.py) apply 
-        # unless the file is clearly not matched by the exclusion pattern.
         final_exclusive = self._project_config.exclusive_filters + man_exc
 
         final_inclusive = []
-        
         if extensions:
-            # If extensions are strictly defined, we modify the includes to only match those extensions
             for path in man_inc:
-                # Normalize path to remove trailing slashes or mixed separators
                 clean_path = os.path.normpath(path).replace(os.sep, '/')
-                
-                # If path looks like a specific file (has extension), keep it as-is. 
                 if os.path.splitext(clean_path)[1]: 
                     final_inclusive.append(clean_path)
                 else:
                     for ext in extensions:
-                        # Construct robust glob pattern
                         final_inclusive.append(f"{clean_path}/**/*{ext}")
         else:
             final_inclusive = man_inc
@@ -348,8 +522,7 @@ Please analyze the request and generate a JSON manifest object with the followin
             QMessageBox.critical(self._view, "Error Scanning", str(e))
             return
 
-        # 3. Pass 1: Content Tree (What we copy)
-        # Use manifest INCLUSIONS, but combined EXCLUSIONS
+        # 3. Pass 1: Content Tree
         content_tree = FilterEngine.apply_filters(
             copy.deepcopy(raw_tree),
             self._project_config.root_path,
@@ -357,7 +530,7 @@ Please analyze the request and generate a JSON manifest object with the followin
             final_exclusive 
         )
         
-        # Collect absolute paths of files explicitly included for the copy
+        # Check if files were matched
         loaded_paths = set()
         def collect_paths(node):
             if node.get("status") == "included" and node["type"] == "file":
@@ -370,9 +543,7 @@ Please analyze the request and generate a JSON manifest object with the followin
             QMessageBox.warning(self._view, "Empty Export", "The manifest matched 0 files.")
             return
 
-        # 4. Pass 2: Atlas Tree (The map we generate)
-        # We use the Project's Tree Exclusion filters (to hide .git, etc)
-        # But NO inclusive filters (we want to show the whole structure)
+        # 4. Pass 2: Atlas Tree
         atlas_tree = FilterEngine.apply_filters(
             copy.deepcopy(raw_tree),
             self._project_config.root_path,
@@ -382,21 +553,16 @@ Please analyze the request and generate a JSON manifest object with the followin
 
         # 5. Export
         try:
-            # Copy Files
             temp_dir = ExportManager.export_files(
                 content_tree,
                 self._project_config.root_path,
                 self._project_config.extension_overrides
             )
-            
-            # Generate Sparse Atlas
             ExportManager.export_markdown_tree(atlas_tree, temp_dir, loaded_paths)
             
-            # Update stats
             self._project_config.export_count += 1
             self._config_manager.save_project(self._project_config)
             
-            # Notify/Open
             if sys.platform == "win32":
                 os.startfile(temp_dir)
             elif sys.platform == "darwin": # macOS
@@ -419,7 +585,7 @@ Please analyze the request and generate a JSON manifest object with the followin
                 subprocess.run(["xdg-open", root_path], check=True)
         except Exception as e:
             QMessageBox.critical(self._view, "Error", f"Could not open root directory:\n{e}")
-        pass
+
     def _on_open_export_path(self):
         """Creates and opens the target export directory."""
         try:
@@ -434,12 +600,10 @@ Please analyze the request and generate a JSON manifest object with the followin
                 subprocess.run(["xdg-open", temp_dir], check=True)
         except Exception as e:
             QMessageBox.critical(self._view, "Error", f"Could not open export directory:\n{e}")
-        pass
-        
+
     def _on_back(self):
         """Handles the 'Back to Projects' action."""
         self._view.close() # Triggers the closeEvent
-        pass
 
     def _on_close_event(self, event):
         """Emits a signal when the window is closed."""
@@ -454,9 +618,12 @@ Please analyze the request and generate a JSON manifest object with the followin
         current_state["markdown_expanded_paths"] = sorted(list(markdown_expanded))
 
         self._project_config.ui_state = current_state
-        # Save new tree config state
+        
+        # We also ensure the active session state is saved, so next open matches this close
         self._project_config.tree_exclusive_filters = self._view.get_tree_filters()
         self._project_config.tree_use_gitignore = self._view.get_use_gitignore_state()
+        self._project_config.inclusive_filters, self._project_config.exclusive_filters = self._view.get_filters()
+        self._project_config.extension_overrides = self._view.get_extension_overrides()
 
         self._config_manager.save_project(self._project_config)
         self.view_closed.emit()
@@ -474,14 +641,10 @@ Please analyze the request and generate a JSON manifest object with the followin
         if not item:
             return
         
-        # This logic ensures that if you right-click an unselected item, it becomes
-        # the *only* selected item. If you right-click an already selected item,
-        # the selection remains unchanged.
         if not item.isSelected():
             tree.clearSelection()
             item.setSelected(True)
 
-        # Retrieve data from the item that was actually clicked
         item_path = item.data(4, Qt.ItemDataRole.UserRole)
         item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
         if not item_path:
@@ -489,7 +652,6 @@ Please analyze the request and generate a JSON manifest object with the followin
 
         menu = QMenu()
         
-        # Add expand/collapse options for directories, only if a single directory is selected
         if item_type == "directory" and len(tree.selectedItems()) == 1:
             if item.isExpanded():
                 collapse_action = menu.addAction("Collapse All")
@@ -502,7 +664,6 @@ Please analyze the request and generate a JSON manifest object with the followin
         exclude_action = menu.addAction("Exclude from Export")
         include_action = menu.addAction("Include in Export")
     
-        # Connect actions to handlers that operate on the entire selection
         exclude_action.triggered.connect(self._on_context_exclude)
         include_action.triggered.connect(self._on_context_include)
         
@@ -516,7 +677,6 @@ Please analyze the request and generate a JSON manifest object with the followin
             item = iterator.value()
             item.setExpanded(expand)
             iterator += 1
-        pass
 
     def _on_context_exclude(self):
         """Adds paths of selected items to the appropriate exclusive filter list."""
@@ -526,7 +686,7 @@ Please analyze the request and generate a JSON manifest object with the followin
             inclusive, exclusive = self._view.get_filters()
         else:
             tree = self._view.markdown_tree_widget
-            inclusive = [] # Not used for markdown tree
+            inclusive = []
             exclusive = self._view.get_tree_filters()
 
         selected_items = tree.selectedItems()
@@ -562,14 +722,13 @@ Please analyze the request and generate a JSON manifest object with the followin
             inclusive, exclusive = self._view.get_filters()
         else:
             tree = self._view.markdown_tree_widget
-            inclusive = [] # Not used
+            inclusive = []
             exclusive = self._view.get_tree_filters()
 
         selected_items = tree.selectedItems()
         if not selected_items:
             return
             
-        # Collect all possible path formats to remove for the selected items
         paths_to_remove = set()
         for item in selected_items:
             full_path = item.data(4, Qt.ItemDataRole.UserRole)
@@ -602,7 +761,7 @@ Please analyze the request and generate a JSON manifest object with the followin
                 try:
                     total_size += os.path.getsize(node["path"])
                 except OSError:
-                    pass # File might be inaccessible
+                    pass
             else:
                 excluded_count += 1
         
@@ -613,7 +772,6 @@ Please analyze the request and generate a JSON manifest object with the followin
             total_size += size
             
         return included_count, excluded_count, total_size
-        pass
 
     def _show_help_dialog(self):
         """Displays a dialog with information on how to use filters."""
@@ -625,8 +783,8 @@ Filters use **glob patterns** to include or exclude files and directories from t
 ---
 
 ### Key Rules
-*   **Exclusive filters always take precedence.** If a file matches both an inclusive and an exclusive pattern, it will be **excluded**.
-*   If **no inclusive filters** are provided, all files are considered included by default (before exclusion rules are applied).
+*   **Exclusive filters always take precedence.**
+*   If **no inclusive filters** are provided, all files are included by default.
 *   To match a directory, end the pattern with a forward slash (e.g., `__pycache__/`).
 
 ---
@@ -650,14 +808,12 @@ Filters use **glob patterns** to include or exclude files and directories from t
 """
         dialog = HelpDialog(help_text, self._view)
         dialog.exec()
-        pass
 
     def _start_file_watcher(self):
         """Initializes and starts the file system observer."""
         if self._observer:
-            self._stop_file_watcher() # Ensure any existing observer is stopped
+            self._stop_file_watcher()
 
-        # Pass the thread-safe emitter to the handler.
         handler = ProjectChangeHandler(self._watchdog_emitter)
         self._observer = Observer()
         self._observer.schedule(handler, self._project_config.root_path, recursive=True)
@@ -665,7 +821,6 @@ Filters use **glob patterns** to include or exclude files and directories from t
             self._observer.start()
         except Exception as e:
             print(f"Error starting file watcher: {e}")
-        pass
 
     def _stop_file_watcher(self):
         """Stops and cleans up the file system observer."""
@@ -673,4 +828,3 @@ Filters use **glob patterns** to include or exclude files and directories from t
             self._observer.stop()
             self._observer.join()
         self._observer = None
-        pass
