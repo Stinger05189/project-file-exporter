@@ -1,18 +1,20 @@
 # src/ui/controllers/project_view_controller.py
 # Copyright (c) 2025 Google. All rights reserved.
 
+import fnmatch
+
 from PyQt6.QtCore import pyqtSignal, QObject, QTimer, Qt
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QMenu, QTreeWidgetItemIterator, QTreeWidgetItem, 
-    QApplication, QInputDialog
+    QApplication, QInputDialog, QListWidgetItem
 )
 import os
 import sys
 import subprocess
 import tempfile
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import copy
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -106,6 +108,7 @@ class ProjectViewController(QObject):
         self._populate_presets_combo()
 
         # 6. Initial Refresh & Show
+        self._refresh_history_ui()
         self._on_apply_filters(is_initial_load=True)
         self._view.show()
         
@@ -119,8 +122,11 @@ class ProjectViewController(QObject):
         # Config & Export
         self._view.apply_filters_button.clicked.connect(self._on_apply_filters)
         self._view.export_button.clicked.connect(self._on_export)
+        self._view.export_selection_btn.clicked.connect(self._on_export_selection_clicked)
         self._view.clipboard_export_button.clicked.connect(self._on_clipboard_export)
         self._view.copy_prompt_button.clicked.connect(self._on_copy_prompt)
+        self._view.history_list_widget.itemDoubleClicked.connect(self._on_history_item_double_clicked)
+        self._view.history_list_widget.itemSelectionChanged.connect(self._on_history_item_selected)
         
         # Preset Management
         self._view.preset_combo.currentIndexChanged.connect(self._on_preset_selection_changed)
@@ -142,6 +148,7 @@ class ProjectViewController(QObject):
         self._view.markdown_tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self._view.main_tab_widget.currentChanged.connect(self._on_tab_changed)
         self._view.use_gitignore_checkbox.stateChanged.connect(self._on_apply_filters)
+        self._view.file_tree_widget.itemSelectionChanged.connect(self._on_tree_selection_changed)
         
         # Window
         self._view.closeEvent = self._on_close_event
@@ -211,7 +218,8 @@ class ProjectViewController(QObject):
         # 5. Persist the change of selection
         self._config_manager.save_project(self._project_config)
         
-        # 6. Auto-Refresh the tree
+        # 6. Auto-Refresh the tree and history UI
+        self._refresh_history_ui()
         self._on_apply_filters(is_auto_refresh=True)
 
     def _on_save_preset_clicked(self):
@@ -478,6 +486,56 @@ Please analyze the request and generate a JSON manifest object with the followin
         except Exception as e:
             QMessageBox.critical(self._view, "Export Error", f"An unexpected error occurred during export:\n{e}")
 
+    def _on_tree_selection_changed(self):
+        """Calculates size and count of selected items for sparse export."""
+        selected_items = self._view.file_tree_widget.selectedItems()
+        selected_file_paths = set()
+
+        def _collect(item):
+            item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if item_type == "file":
+                path = item.data(4, Qt.ItemDataRole.UserRole)
+                if path:
+                    size = item.data(1, Qt.ItemDataRole.UserRole) or 0
+                    selected_file_paths.add((path, size))
+            else:
+                for i in range(item.childCount()):
+                    _collect(item.child(i))
+
+        for item in selected_items:
+            _collect(item)
+            
+        total_size = sum(size for _, size in selected_file_paths)
+        file_count = len(selected_file_paths)
+            
+        self._view.selection_stats_label.setText(f"Selected: {file_count} files ({self._view._format_size(total_size)})")
+        self._view.export_selection_btn.setEnabled(file_count > 0)
+
+    def _on_export_selection_clicked(self):
+        """Gathers paths from manual tree selection and triggers sparse export."""
+        selected_items = self._view.file_tree_widget.selectedItems()
+        if not selected_items:
+            return
+
+        include_paths = []
+        for item in selected_items:
+            full_path = item.data(4, Qt.ItemDataRole.UserRole)
+            item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if not full_path:
+                continue
+            
+            relative_path = os.path.relpath(full_path, self._project_config.root_path).replace(os.sep, '/')
+            
+            if item_type == "directory":
+                # Standard recursive glob pattern to include all files within the folder
+                include_paths.append(f"{relative_path}/**/*")
+                # Include the folder itself explicitly in case it's empty or needed for tree building
+                include_paths.append(f"{relative_path}/")
+            else:
+                include_paths.append(relative_path)
+            
+        self._execute_sparse_export(include_paths, "Manual")
+
     def _on_clipboard_export(self):
         """Exports files based on a JSON manifest in the clipboard."""
         clipboard = QApplication.clipboard()
@@ -493,14 +551,11 @@ Please analyze the request and generate a JSON manifest object with the followin
              QMessageBox.warning(self._view, "Invalid Manifest", "JSON must contain an 'include' array.")
              return
 
-        # 1. Translate Manifest to Filters
+        # Handle extensions formatting mapping for the unified sparse exporter
         man_inc = manifest.get("include", [])
-        man_exc = manifest.get("exclude", [])
         extensions = manifest.get("filter_extensions", [])
-
-        final_exclusive = self._project_config.exclusive_filters + man_exc
-
         final_inclusive = []
+        
         if extensions:
             for path in man_inc:
                 clean_path = os.path.normpath(path).replace(os.sep, '/')
@@ -510,11 +565,45 @@ Please analyze the request and generate a JSON manifest object with the followin
                     for ext in extensions:
                         final_inclusive.append(f"{clean_path}/**/*{ext}")
         else:
-            final_inclusive = man_inc
+            for path in man_inc:
+                clean_path = os.path.normpath(path).replace(os.sep, '/')
+                
+                # Check if it was explicitly a folder OR if it lacks a file extension
+                is_dir_like = path.endswith('/') or path.endswith('\\') or not os.path.splitext(clean_path)[1]
+                
+                if is_dir_like and not clean_path.endswith('*'):
+                    # Include contents, the folder node, and the literal name (for extensionless files like "Makefile")
+                    final_inclusive.append(f"{clean_path}/**/*")
+                    final_inclusive.append(f"{clean_path}/")
+                    final_inclusive.append(clean_path) 
+                else:
+                    final_inclusive.append(clean_path)
 
-        # 2. Get Raw Tree
+        # Extend temporary exclusive filters
+        temp_exclusive = manifest.get("exclude", [])
+
+        self._execute_sparse_export(
+            include_paths=final_inclusive, 
+            export_type="Manifest", 
+            comment=manifest.get("comment", ""),
+            temp_exclusive=temp_exclusive
+        )
+
+    def _execute_sparse_export(self, include_paths: list, export_type: str, comment: str = "", temp_exclusive: list = None):
+        """Unified method for generating a sparse export from a list of paths."""
+        if not include_paths:
+            QMessageBox.warning(self._view, "Empty Selection", "No paths provided for export.")
+            return
+
+        if temp_exclusive is None:
+            temp_exclusive = []
+
+        final_exclusive = self._project_config.exclusive_filters + temp_exclusive
+
+
+        # 1. Get Raw Tree (Fix: Capture gitignore_rules)
         try:
-            raw_tree, _ = FileScanner.scan_directory(
+            raw_tree, gitignore_rules = FileScanner.scan_directory(
                 self._project_config.root_path,
                 self._project_config.blacklisted_paths
             )
@@ -522,11 +611,11 @@ Please analyze the request and generate a JSON manifest object with the followin
             QMessageBox.critical(self._view, "Error Scanning", str(e))
             return
 
-        # 3. Pass 1: Content Tree
+        # 2. Pass 1: Content Tree
         content_tree = FilterEngine.apply_filters(
             copy.deepcopy(raw_tree),
             self._project_config.root_path,
-            final_inclusive,
+            include_paths,
             final_exclusive 
         )
         
@@ -540,18 +629,22 @@ Please analyze the request and generate a JSON manifest object with the followin
         collect_paths(content_tree)
 
         if not loaded_paths:
-            QMessageBox.warning(self._view, "Empty Export", "The manifest matched 0 files.")
+            QMessageBox.warning(self._view, "Empty Export", "The selection/manifest matched 0 files.")
             return
 
-        # 4. Pass 2: Atlas Tree
+        # 3. Pass 2: Atlas Tree (Fix: Conditionally include gitignore_rules)
+        tree_exclude_filters = self._project_config.tree_exclusive_filters
+        if self._project_config.tree_use_gitignore:
+            tree_exclude_filters = tree_exclude_filters + gitignore_rules
+
         atlas_tree = FilterEngine.apply_filters(
             copy.deepcopy(raw_tree),
             self._project_config.root_path,
             [], 
-            self._project_config.tree_exclusive_filters
+            tree_exclude_filters # Use the updated variable here
         )
-
-        # 5. Export
+        
+        # 4. Export
         try:
             temp_dir = ExportManager.export_files(
                 content_tree,
@@ -560,8 +653,25 @@ Please analyze the request and generate a JSON manifest object with the followin
             )
             ExportManager.export_markdown_tree(atlas_tree, temp_dir, loaded_paths)
             
+            # Save History
+            history_item = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "type": export_type,
+                "file_count": len(loaded_paths),
+                "paths": include_paths,
+                "comment": comment,
+                "temp_exclusive": temp_exclusive
+            }
+            active = self._project_config.active_preset_name
+            if "export_history" not in self._project_config.presets[active]:
+                self._project_config.presets[active]["export_history"] = []
+                
+            self._project_config.presets[active]["export_history"].insert(0, history_item)
+            self._project_config.presets[active]["export_history"] = self._project_config.presets[active]["export_history"][:15]
+            
             self._project_config.export_count += 1
             self._config_manager.save_project(self._project_config)
+            self._refresh_history_ui()
             
             if sys.platform == "win32":
                 os.startfile(temp_dir)
@@ -572,6 +682,107 @@ Please analyze the request and generate a JSON manifest object with the followin
 
         except Exception as e:
             QMessageBox.critical(self._view, "Export Error", f"An unexpected error occurred during export:\n{e}")
+
+    def _refresh_history_ui(self):
+        """Populates the history list with the active preset's context exports."""
+        self._view.history_list_widget.clear()
+        active = self._project_config.active_preset_name
+        history = self._project_config.presets.get(active, {}).get("export_history", [])
+        
+        for item in history:
+            try:
+                # Parse the naive UTC time string
+                dt_naive = datetime.fromisoformat(item["timestamp"])
+                
+                # Assign it the UTC time zone, then convert to local system time
+                dt_utc = dt_naive.replace(tzinfo=timezone.utc)
+                dt_local = dt_utc.astimezone()
+                
+                # Format to Year-Month-Day Hour:Minute AM/PM
+                time_str = dt_local.strftime("%Y-%m-%d %I:%M %p")
+            except ValueError:
+                time_str = "Unknown"
+                
+            comment_str = f" - {item['comment']}" if item.get('comment') else ""
+            display_text = f"[{time_str}] {item['type']} ({item['file_count']} files){comment_str}"
+            
+            list_item = QListWidgetItem(display_text)
+            list_item.setData(Qt.ItemDataRole.UserRole, item)
+            self._view.history_list_widget.addItem(list_item)
+
+    def _on_history_item_double_clicked(self, item):
+        """Re-runs a historical export when double-clicked."""
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data:
+            self._execute_sparse_export(
+                include_paths=data.get("paths", []),
+                export_type=data.get("type", "History"),
+                comment=data.get("comment", ""),
+                temp_exclusive=data.get("temp_exclusive", [])
+            )
+
+    def _on_history_item_selected(self):
+        """Visualizes a history item's selection in the file tree."""
+        selected_items = self._view.history_list_widget.selectedItems()
+        if not selected_items:
+            return
+            
+        # Get the history data
+        data = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+            
+        include_paths = data.get("paths", [])
+        
+        # Block signals to prevent _on_tree_selection_changed from firing repeatedly
+        self._view.file_tree_widget.blockSignals(True)
+        self._view.file_tree_widget.clearSelection()
+        
+        iterator = QTreeWidgetItemIterator(self._view.file_tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            full_path = item.data(4, Qt.ItemDataRole.UserRole)
+            item_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            
+            if full_path:
+                rel_path = os.path.relpath(full_path, self._project_config.root_path).replace(os.sep, '/')
+                if item_type == "directory":
+                    rel_path += '/'
+                    
+                # Check for match against the history patterns
+                is_match = False
+                for pattern in include_paths:
+                    # 1. Exact match
+                    if rel_path == pattern:
+                        is_match = True
+                        break
+                    
+                    # 2. Handle the recursive directory pattern (e.g., src/core/**/*)
+                    if pattern.endswith('**/*'):
+                        base_dir = pattern[:-4] 
+                        if rel_path.startswith(base_dir):
+                            is_match = True
+                            break
+                            
+                    # 3. Generic glob matching for manifest extensions (e.g., *.py)
+                    if fnmatch.fnmatch(rel_path.rstrip('/'), pattern):
+                        is_match = True
+                        break
+                        
+                if is_match:
+                    item.setSelected(True)
+                    # Expand parent folders so the newly selected items are visible
+                    parent = item.parent()
+                    while parent:
+                        parent.setExpanded(True)
+                        parent = parent.parent()
+                        
+            iterator += 1
+            
+        self._view.file_tree_widget.blockSignals(False)
+        
+        # Trigger the stat calculation manually once the batch selection is finished
+        self._on_tree_selection_changed()
 
     def _on_open_root_path(self):
         """Opens the project's root source directory."""

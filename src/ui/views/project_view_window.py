@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter, QLabel,
     QFormLayout, QStyledItemDelegate, QTreeWidgetItemIterator, QAbstractItemView,
     QSizePolicy, QMenu, QToolButton, QTabWidget, QStackedWidget, QCheckBox,
-    QComboBox
+    QComboBox, QListWidget
 )
 from PyQt6.QtCore import Qt, QRectF, QByteArray
 from src.utils import resource_path
@@ -69,10 +69,6 @@ class ProjectViewWindow(QMainWindow):
         self.back_action = QAction("Back to Projects", self)
         self.export_button = QPushButton("Export Files...")
         self.export_button.setObjectName("exportButton")
-        
-        self.clipboard_export_button = QPushButton("📄 Export from Manifest")
-        self.clipboard_export_button.setToolTip("Export files based on a JSON manifest in your clipboard")
-        self.clipboard_export_button.setObjectName("clipboardExportButton")
 
         self.copy_prompt_button = QPushButton("📋 Copy AI Prompt")
         self.copy_prompt_button.setToolTip("Copy the system prompt to instruct AI on how to generate manifests")
@@ -91,7 +87,6 @@ class ProjectViewWindow(QMainWindow):
         toolbar.addAction(self.back_action)
         toolbar.addSeparator()
         toolbar.addWidget(self.export_button)
-        toolbar.addWidget(self.clipboard_export_button)
         toolbar.addWidget(self.copy_prompt_button)
         toolbar.addAction(self.open_root_action)
         toolbar.addAction(self.open_export_action)
@@ -197,6 +192,26 @@ class ProjectViewWindow(QMainWindow):
         file_export_form_layout.addRow(QLabel("Inclusive Filters:"), self.inclusive_filters_textbox)
         file_export_form_layout.addRow(QLabel("Exclusive Filters:"), self.exclusive_filters_textbox)
         file_export_form_layout.addRow(QLabel("Extension Overrides:"), self.extension_overrides_textbox)
+
+        self.selection_stats_label = QLabel("Selected: 0 files (0 B)")
+        self.export_selection_btn = QPushButton("Export Selection")
+        self.export_selection_btn.setEnabled(False)
+        self.export_selection_btn.setObjectName("exportSelectionButton")
+        
+        self.clipboard_export_button = QPushButton("📄 Export from Manifest")
+        self.clipboard_export_button.setToolTip("Export files based on a JSON manifest in your clipboard")
+        self.clipboard_export_button.setObjectName("clipboardExportButton")
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(self.export_selection_btn)
+        btn_layout.addWidget(self.clipboard_export_button)
+        
+        self.history_list_widget = QListWidget()
+        self.history_list_widget.setMinimumHeight(100)
+        
+        file_export_form_layout.addRow(self.selection_stats_label)
+        file_export_form_layout.addRow(btn_layout)
+        file_export_form_layout.addRow(QLabel("Recent Context Exports:"), self.history_list_widget)
         
         # Page 2: Tree Markdown Export Configuration
         tree_export_config_widget = QWidget()
@@ -365,7 +380,10 @@ class ProjectViewWindow(QMainWindow):
         tree_item.setData(0, Qt.ItemDataRole.UserRole + 1, node["type"])
         tree_item.setData(4, Qt.ItemDataRole.UserRole, node["path"])
 
-        size_str = self._format_size(node.get("size", 0))
+        size_bytes = node.get("size", 0)
+        tree_item.setData(1, Qt.ItemDataRole.UserRole, size_bytes)
+
+        size_str = self._format_size(size_bytes)
         tree_item.setText(1, size_str)
         tree_item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight)
 

@@ -48,7 +48,8 @@ class ProjectConfig:
                 "exclusive_filters": [],
                 "tree_exclusive_filters": [],
                 "tree_use_gitignore": True,
-                "extension_overrides": {}
+                "extension_overrides": {},
+                "export_history": []
             }
         }
 
@@ -122,8 +123,14 @@ class ProjectConfig:
                     "exclusive_filters": [],
                     "tree_exclusive_filters": [],
                     "tree_use_gitignore": True,
-                    "extension_overrides": {}
+                    "extension_overrides": {},
+                    "export_history": []
                 }
+            
+            # Ensure backward compatibility for export_history in existing presets
+            for p_name, p_data in project.presets.items():
+                if "export_history" not in p_data:
+                    p_data["export_history"] = []
         else:
             # LEGACY FILE DETECTED: Migration Strategy
             # Create a 'Default' preset using the root-level values found in the old file
@@ -133,7 +140,8 @@ class ProjectConfig:
                     "exclusive_filters": copy.deepcopy(exc),
                     "tree_exclusive_filters": copy.deepcopy(tree_exc),
                     "tree_use_gitignore": use_git,
-                    "extension_overrides": copy.deepcopy(overrides)
+                    "extension_overrides": copy.deepcopy(overrides),
+                    "export_history": []
                 }
             }
             project.active_preset_name = "Default"
